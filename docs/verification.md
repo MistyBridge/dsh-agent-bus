@@ -19,7 +19,7 @@ pnpm build      # tsc 双配置 + tsdown 客户端 bundle
 | `tools-render` 测试 | 待验收/待投递徽标、可见集规则、交接文档读取、get_task 可达性(决策 4 严格鉴权) | 36 |
 | `tools-schema` 测试 | 全工具面输出 schema 与返回面一致性 + checkedTool 报错可读性(横切关注点) | 27 |
 | `claim-task` 测试 | claim_task 领取转移/鉴权/幂等 + 心跳重投活跃态冷却(决策 2) | 11 |
-| `flow-naming` 测试 | create_flow 重名拒绝/命名建议 + rename_flow 鉴权/重名 + 流投影 description(决策 8) | 10 |
+| `flow-naming` 测试 | create_flow 重名拒绝/命名建议/≤20 字上限 + rename_flow 鉴权/重名 + 流投影 description(决策 8) | 12 |
 | `fingerprint` 测试 | 构建指纹解析、实例过期判定(决策 7 运行实例可更新提示) | 23 |
 | `wake` 测试 | 唤醒会话 preset 解析与装配(决策 10 A 部分) | 9 |
 | `scheduler` 测试 | 启动恢复扫描、滞留任务聚合通知(决策 10 B 部分) | 6 |
