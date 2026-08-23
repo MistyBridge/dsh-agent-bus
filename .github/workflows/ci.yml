@@ -6,15 +6,126 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: windows-latest
+  # Each gate runs its own copy of the harness environment (dsh-agent-bus is a
+  # workspace member whose devDependencies link into the harness), so the
+  # workflow surfaces one check per gate instead of a single monolithic job.
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: ab
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          path: harness
+      - name: Stage dsh-agent-bus into harness workspace
+        run: |
+          rm -rf harness/dsh-agent-bus
+          cp -a ab harness/dsh-agent-bus
+      - name: Add dsh-agent-bus to pnpm workspace members
+        run: |
+          if ! grep -q '^  - dsh-agent-bus$' harness/pnpm-workspace.yaml; then
+            sed -i 's|^  - packages/\*/\*$|&\n  - dsh-agent-bus|' harness/pnpm-workspace.yaml
+          fi
+          grep -n 'dsh-agent-bus' harness/pnpm-workspace.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - run: corepack enable
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: pnpm build
+          cache-dependency-path: harness/pnpm-lock.yaml
+      - name: Install (harness workspace incl. dsh-agent-bus)
+        working-directory: harness
+        run: pnpm install --no-frozen-lockfile
+      - name: Build harness libraries (emit lib for @deepseek-ai/*)
+        working-directory: harness
+        run: pnpm run build:lib
+      - name: Typecheck dsh-agent-bus
+        working-directory: harness
+        run: pnpm --filter dsh-agent-bus typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ab
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          path: harness
+      - name: Stage dsh-agent-bus into harness workspace
+        run: |
+          rm -rf harness/dsh-agent-bus
+          cp -a ab harness/dsh-agent-bus
+      - name: Add dsh-agent-bus to pnpm workspace members
+        run: |
+          if ! grep -q '^  - dsh-agent-bus$' harness/pnpm-workspace.yaml; then
+            sed -i 's|^  - packages/\*/\*$|&\n  - dsh-agent-bus|' harness/pnpm-workspace.yaml
+          fi
+          grep -n 'dsh-agent-bus' harness/pnpm-workspace.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: harness/pnpm-lock.yaml
+      - name: Install (harness workspace incl. dsh-agent-bus)
+        working-directory: harness
+        run: pnpm install --no-frozen-lockfile
+      - name: Build harness libraries (emit lib for @deepseek-ai/*)
+        working-directory: harness
+        run: pnpm run build:lib
+      - name: Test dsh-agent-bus
+        working-directory: harness
+        run: pnpm --filter dsh-agent-bus test
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ab
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: master
+          path: harness
+      - name: Stage dsh-agent-bus into harness workspace
+        run: |
+          rm -rf harness/dsh-agent-bus
+          cp -a ab harness/dsh-agent-bus
+      - name: Add dsh-agent-bus to pnpm workspace members
+        run: |
+          if ! grep -q '^  - dsh-agent-bus$' harness/pnpm-workspace.yaml; then
+            sed -i 's|^  - packages/\*/\*$|&\n  - dsh-agent-bus|' harness/pnpm-workspace.yaml
+          fi
+          grep -n 'dsh-agent-bus' harness/pnpm-workspace.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: harness/pnpm-lock.yaml
+      - name: Install (harness workspace incl. dsh-agent-bus)
+        working-directory: harness
+        run: pnpm install --no-frozen-lockfile
+      - name: Build harness libraries (emit lib for @deepseek-ai/*)
+        working-directory: harness
+        run: pnpm run build:lib
+      - name: Build dsh-agent-bus
+        working-directory: harness
+        run: pnpm --filter dsh-agent-bus build
