@@ -18,11 +18,11 @@ dsh-agent-bus 是 [DeepSeek Harness](https://deepseek-ai/deepseek-harness) 插�
 
 来自真实团队在总线上的两张运行画面：
 
-![任务工作台](https://github.com/MistyBridge/dsh-agent-bus/raw/main/docs/images/agent-bus-test.png)
+![任务工作台](docs/images/agent-bus-test.png)
 
 *任务工作台：每件工作的状态、成员与消耗一目了然。*
 
-![流程(DAG)看板](https://github.com/MistyBridge/dsh-agent-bus/raw/main/docs/images/QQ_1787487778189.png)
+![流程(DAG)看板](docs/images/QQ_1787487778189.png)
 
 *流程(DAG)看板：流程的节点，只在全部前置结算后投递。*
 

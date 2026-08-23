@@ -18,11 +18,11 @@ You keep the specialists. You stop copy-pasting.
 
 Two live screens from a real team running on the bus:
 
-![Task workbench](https://github.com/MistyBridge/dsh-agent-bus/raw/main/docs/images/agent-bus-test.png)
+![Task workbench](docs/images/agent-bus-test.png)
 
 *Task workbench: every job's state, its parties, and its tokens at a glance.*
 
-![Flow (DAG) board](https://github.com/MistyBridge/dsh-agent-bus/raw/main/docs/images/QQ_1787487778189.png)
+![Flow (DAG) board](docs/images/QQ_1787487778189.png)
 
 *Flow (DAG) board: a flow's nodes, delivered only after their predecessors settle.*
 
