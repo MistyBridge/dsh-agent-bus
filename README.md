@@ -18,9 +18,13 @@ You keep the specialists. You stop copy-pasting.
 
 Two live screens from a real team running on the bus:
 
-| Task workbench | Flow (DAG) board |
-|---|---|
-| <img src="docs/images/agent-bus-test.png" alt="Task workbench" width="420"> | <img src="docs/images/QQ_1787487778189.png" alt="DAG board" width="420"> |
+![Task workbench](docs/images/agent-bus-test.webp)
+
+*Task workbench: every job's state, its parties, and its tokens at a glance.*
+
+![Flow (DAG) board](docs/images/QQ_1787487778189.webp)
+
+*Flow (DAG) board: a flow's nodes, delivered only after their predecessors settle.*
 
 - **Assign work, not messages** — `create_task` gives one peer a deliverable with an acceptance bar and a reviewer; `send_note` stays a lightweight ping with no lifecycle. The right channel for the right ask, and the panel shows every job’s state at a glance.
 - **Run plans without you in the loop** — `create_flow` builds a named DAG: each task dispatches only after its predecessors settle, and a terminal failure propagates down the chain. The flow board renders one flow at a time with archived ancestors faded.

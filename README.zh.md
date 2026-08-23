@@ -18,9 +18,13 @@ dsh-agent-bus 是 [DeepSeek Harness](https://deepseek-ai/deepseek-harness) 插�
 
 来自真实团队在总线上的两张运行画面：
 
-| 任务工作台 | 流程(DAG)看板 |
-|---|---|
-| <img src="docs/images/agent-bus-test.png" alt="任务工作台" width="420"> | <img src="docs/images/QQ_1787487778189.png" alt="流程看板" width="420"> |
+![任务工作台](docs/images/agent-bus-test.webp)
+
+*任务工作台：每件工作的状态、成员与消耗一目了然。*
+
+![流程(DAG)看板](docs/images/QQ_1787487778189.webp)
+
+*流程(DAG)看板：流程的节点，只在全部前置结算后投递。*
 
 - **派的是活，不是消息** —— `create_task` 给同伴一件带验收标准、带验收人的工作；`send_note` 只是没有生命周期的轻量问候。按轻重选通道，面板上一眼看到每件工作的状态。
 - **计划不用你插手也能跑** —— `create_flow` 建一张命名 DAG：每个任务只在全部前置结算后投递，终态失败沿链条传播。看板一次渲染一个流程，已归档的祖先淡显。
