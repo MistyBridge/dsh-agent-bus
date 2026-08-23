@@ -6,7 +6,7 @@ dsh-agent-bus 的四层验证体系:离线检查 → 组合验证 → 真实 e2e
 
 ```sh
 pnpm install
-pnpm test       # vitest 单元测试(480 用例,见下表分文件数)
+pnpm test       # vitest 单元测试(496 用例,见下表分文件数;随并发工人持续变动,以实测为准)
 pnpm build      # tsc 双配置 + tsdown 客户端 bundle
 ```
 
@@ -17,21 +17,22 @@ pnpm build      # tsc 双配置 + tsdown 客户端 bundle
 | `panel-model` 测试 | 客户端分区、节点集/祖先链、调度判定、DAG 布局、归档规则、状态徽标 | 130 |
 | `message-channel` 测试 | 双通道 header、限流隔离、配置默认值、离线入队 | 36 |
 | `tools-render` 测试 | 待验收/待投递徽标、可见集规则、交接文档读取、get_task 可达性(决策 4 严格鉴权) | 36 |
-| `tools-schema` 测试 | 全工具面输出 schema 与返回面一致性 + checkedTool 报错可读性(横切关注点) | 26 |
+| `tools-schema` 测试 | 全工具面输出 schema 与返回面一致性 + checkedTool 报错可读性(横切关注点) | 27 |
 | `claim-task` 测试 | claim_task 领取转移/鉴权/幂等 + 心跳重投活跃态冷却(决策 2) | 11 |
 | `flow-naming` 测试 | create_flow 重名拒绝/命名建议 + rename_flow 鉴权/重名 + 流投影 description(决策 8) | 10 |
 | `fingerprint` 测试 | 构建指纹解析、实例过期判定(决策 7 运行实例可更新提示) | 23 |
 | `wake` 测试 | 唤醒会话 preset 解析与装配(决策 10 A 部分) | 9 |
 | `scheduler` 测试 | 启动恢复扫描、滞留任务聚合通知(决策 10 B 部分) | 6 |
 | `compression-priority` 测试 | 任务通道优先于消息通道的投递优先级(决策 3) | 18 |
-| `question-bridge` 测试 | 提问桥接:ask 注册/超时、答案校验(决策 9) | 15 |
+| `question-bridge` 测试 | 提问桥接:ask 注册/超时、答案校验、A2A/user↔A 注入上下文判定(决策 9) | 20 |
 | `approval-bridge` 测试 | PM 代审批:转发、时限、拒绝理由与建议(决策 6) | 7 |
 | `create-member` 测试 | 成员入职解析/回滚/权限映射(决策 5) | 47 |
+| `tool-help` 测试 | tool_help 按需说明书 + 文档/工具面一致性(渐进式披露) | 8 |
 | `smoke` 测试 | 测试基座可用性 | 2 |
-| **合计** | | **480** |
+| **合计** | | **496** |
 
 > 注:`panel-model` 的 2 组 `it.each`(各 13 行)统计为 26 用例,与 104 个普通 `it`
-> 相加共 130;`tools-schema` 的 1 组 `it.each`(19 行)与 7 个普通 `it` 共 26。
+> 相加共 130;`tools-schema` 的 1 组 `it.each`(20 行)与 7 个普通 `it` 共 27。
 > e2e 脚本(`tests/e2e/*-test.ts`)为本地资产,不计入单测,且命名保证 vitest 不误收。
 
 ## 2. 组合验证(profile 生效)

@@ -79,7 +79,21 @@ describe('create_flow 命名(决策 8)', () => {
     const harness = await newHarness()
     await expect(
       harness.run('create_flow', { name: '   ' }, SESSION_A),
-    ).rejects.toThrow(/1–80/)
+    ).rejects.toThrow(/不超过 20 字/)
+  })
+
+  it('超过 20 字(21 字)拒绝,20 字通过(决策 8 命名上限)', async () => {
+    const harness = await newHarness()
+    // 21 字 → 拒绝。
+    await expect(
+      harness.run('create_flow', { name: 'a'.repeat(21) }, SESSION_A),
+    ).rejects.toThrow(/不超过 20 字/)
+    // 恰好 20 字 → 通过。
+    const ok = await harness.run('create_flow', { name: 'a'.repeat(20) }, SESSION_A) as {
+      flowId: string
+      name: string
+    }
+    expect(ok.name).toBe('a'.repeat(20))
   })
 })
 
@@ -124,6 +138,19 @@ describe('rename_flow(决策 8)', () => {
     await expect(
       harness.run('rename_flow', { flow_id: 'ghost', name: 'X 流程' }, SESSION_A),
     ).rejects.toThrow(/no such flow/)
+  })
+
+  it('超过 20 字(21 字)拒绝,20 字通过(决策 8 命名上限)', async () => {
+    const harness = await newHarness()
+    const flowId = await createFlow(harness, '旧名')
+    await expect(
+      harness.run('rename_flow', { flow_id: flowId, name: 'a'.repeat(21) }, SESSION_A),
+    ).rejects.toThrow(/不超过 20 字/)
+    const ok = await harness.run('rename_flow', { flow_id: flowId, name: 'a'.repeat(20) }, SESSION_A) as {
+      flowId: string
+      name: string
+    }
+    expect(ok.name).toBe('a'.repeat(20))
   })
 })
 

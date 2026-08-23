@@ -12,6 +12,13 @@
 
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
+// The agent-bus relay kinds are declared in delivery.ts (AgentBusTaskMessageSource /
+// AgentBusMessageSource). An earlier duplicate of this MessageSourceMap
+// augmentation here used inline literal types and merged with delivery.ts's
+// interface-typed declaration, which TS rejects (TS2717: subsequent property
+// declarations must have the same type). delivery.ts already contributes these
+// kinds globally, so no separate augmentation is needed here.
+
 declare module '@deepseek-ai/cordis' {
   interface Events {
     /**

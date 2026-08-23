@@ -193,8 +193,9 @@ export function installApprovalBridge(
       'Answer one PM-delegated approval request (decision 6). Only the task initiator '
       + '(the recorded approver) may answer; anyone else is refused. A rejection MUST '
       + 'carry reason (why) and suggestion (a concrete remedy — a lower-privilege '
-      + 'alternative, a task-scope change, or a permission adjustment), which are '
-      + 'forwarded to the worker together. Approval ids come from the approval notice '
+      + 'alternative, a task-scope change, or a permission adjustment); on reject they '
+      + 'are returned together with the outcome (reason/suggestion fields), so the '
+      + 'worker reads them synchronously. Approval ids come from the approval notice '
       + 'the bridge sent you.',
     parameters: {
       approval_id: { type: 'string', required: true, description: 'The approval id from the notice.' },
@@ -209,6 +210,8 @@ export function installApprovalBridge(
         properties: {
           approvalId: { type: 'string', required: true },
           outcome: { type: 'string', required: true, enum: ['allowed-once', 'rejected'] },
+          reason: { type: 'string' },
+          suggestion: { type: 'string' },
         },
       },
       render: (_args, result) => [{
@@ -235,8 +238,10 @@ export function installApprovalBridge(
         if (typeof args.suggestion !== 'string' || args.suggestion.trim() === '') {
           throw new Error('reject requires suggestion: propose a concrete remedy (lower-privilege alternative, task-scope change, or permission adjustment)')
         }
-        // The outcome has no reason channel; forward reason + suggestion to
-        // the worker as a separate notice (decision 6 §4).
+        // The return value carries reason + suggestion synchronously (the
+        // request's own channel, so the worker reads them together with the
+        // outcome). The notice below stays as a redundant parallel delivery
+        // guaranteeing the worker also sees them if the return is read first.
         notifySession(
           ctx,
           entry.requester,
@@ -247,7 +252,7 @@ export function installApprovalBridge(
           'reminder',
         )
         settle(entry.id, 'rejected')
-        return { approvalId: entry.id, outcome: 'rejected' as const }
+        return { approvalId: entry.id, outcome: 'rejected' as const, reason: args.reason, suggestion: args.suggestion }
       }
       settle(entry.id, 'allowed-once')
       return { approvalId: entry.id, outcome: 'allowed-once' as const }

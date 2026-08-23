@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 import { validateJsonSchemaValue, type JsonSchemaNode, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { checkedTool, ToolOutputMismatchError } from '../src/checked-tool.ts'
+import { TOOL_NAMES as DOC_NAMES } from '../src/tool-docs.ts'
 import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools.ts'
 import { TaskId, type TaskRecord } from '../src/types.ts'
 import {
@@ -46,28 +47,8 @@ const CONFIG: ToolsConfig = {
   maxMessagesPerMinute: 20,
 }
 
-/** 工具面全集：数量与名字的漂移本身就是回归信号。 */
-const TOOL_NAMES = [
-  'list_peers',
-  'send_note',
-  'create_flow',
-  'reassign_task',
-  'submit_handoff',
-  'list_flows',
-  'create_task',
-  'edit_task',
-  'list_tasks',
-  'get_task',
-  'report_task',
-  'settle_task',
-  'cancel_task',
-  'request_input',
-  'claim_task',
-  'rename_flow',
-  'update_card',
-  'answer_question',
-  'create_member',
-] as const
+/** 工具面全集：数量与名字的漂移本身就是回归信号。19 个文档工具来自 tool-docs 的单一事实源，加披露加载器 tool_help。 */
+const TOOL_NAMES = [...DOC_NAMES, 'tool_help'] as const
 
 function captureTools(): Map<string, CapturedTool> {
   const defs = new Map<string, CapturedTool>()
@@ -228,6 +209,8 @@ function maximalValueOf(name: string): unknown {
       }
     case 'update_card':
       return { description: 'desc', capabilities: [{ id: 'code', label: 'Coding' }] }
+    case 'tool_help':
+      return { tool: 'send_note', doc: 'manual text' }
     default:
       throw new Error(`no maximal value fixture for tool "${name}"`)
   }

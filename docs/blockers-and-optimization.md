@@ -1,11 +1,12 @@
 # dsh-agent-bus 卡点与优化建议（含产品决策）
 
-> 状态：**v8，全部决策已实施**（2026-08-23 产品批复 + 决策 8/9/10 补充；Phase 2 决策实施全部落地）。已采纳的决策进入「六、已采纳决策设计要点」，由开发团队按要点实施；无未决项。后续新增卡点/决策持续追加。
+> 状态：**v9，全部决策已实施 + Phase 3 优化完成**（2026-08-23 产品批复 + 决策 8/9/10 补充；Phase 2 决策实施全部落地；Phase 3 遗留卡点优化全部落地）。已采纳的决策进入「六、已采纳决策设计要点」，由开发团队按要点实施；无未决项。后续新增卡点/决策持续追加。
 > v4 变更：剩余三项全部决策——心跳重投冷却（要）、实例更新提示（做）、PM 判定=任务指派方。
 > v5 变更：新增决策 8（流程命名管理，产品反馈：流程界面新建的流程需要良好命名，否则难以管理任务组）。
 > v6 变更：新增决策 9（提问转交任务发起方，产品反馈：worker 执行任务中调用 ask_user_question 应由任务发起方回答；产品确认：**A2A 提问需转发，user↔A 提问不转发**）。
 > v7 变更：新增决策 10（重启恢复：平台崩溃后自动拉起会话并恢复工具集。实战:20:20 重启后所有经 wakeSession 唤醒的工人缺文件/shell 工具,根因=wakeSession 未传 preset setup;PM 手工逐条发 note 唤醒,步骤多)。
 > v8 变更：Phase 2 全部落地（决策 1-10 已实施完成）——16 文件 480 用例全绿、typecheck 双零错误、build 通过。决策 1-9 由团队按 DAG 实施并逐项验收,决策 10 由 PM 直接实施(A wake 修复 / B 启动恢复扫描 / C 面板提示)。
+> v9 变更：Phase 3 遗留卡点优化全部落地——①审批拒绝 reason+suggestion 随返回同步附上(T1)；②A2A/user↔A 判定改用注入上下文(open turn 首个消息 + source.kind + findByMessage,T2)；③19 工具完整梳理 + 说明书单一事实源(tool-docs.ts)+ USAGE_TEXT 收缩为短总览 + tool_help 渐进式披露(T3)；④流程命名 ≤20 字上限(决策 8 追加,T3)；决策 10 B/C 状态修正为已完成。门禁:17 文件 496 用例全绿、typecheck 双零错误、build 通过。
 
 ---
 
@@ -150,7 +151,8 @@
 3. **rename_flow 工具**：流程创建后**可改名**（`rename_flow(flow_id, name, description?)`），重名检测同上。
 4. **权限（产品确认）**：改名**仅创建者可改**（`createdBy`），他人报错「仅流程创建者可改名」。
 5. **DAG 界面**：流程列表项显示 `name` + `description`（截断一行，悬停看全文）+ 任务数，多流程并排可区分。
-6. **测试**：重名拒绝、无意义名放行但提示、rename 成功/重名/越权、界面模型。
+6. **命名上限（产品反馈 2026-08-23 追加）**：流程命名**不允许超过 20 个字**，且须**简明说出核心内容**（一眼能看出这个任务组在做什么）。create_flow / rename_flow 的 name 校验由「1–80 字符」收紧为「≤20 字符」；超长报错含「流程名不超过 20 字,并简明概括任务组核心内容」。命名规范写入说明书(docs/usage.md 与 USAGE_TEXT 的 create_flow/rename_flow 描述)。重名拒绝与无意义名提示保留。
+7. **测试**：重名拒绝、无意义名放行但提示、rename 成功/重名/越权、界面模型、**20 字上限拒绝**。
 
 ### 决策 9：提问转交任务发起方——A2A 提问转发，user↔A 提问不转发（产品反馈 2026-08-23）
 1. **场景**：worker 执行 agent 发起的任务过程中，调用 dsh 官方工具 `ask_user_question`（选择题请求）——默认会弹给人类用户，但正确回答者是任务发起方（PM）。
@@ -171,13 +173,13 @@
    - `wakeSession` resume 前先 `ctx.get('sessionPersistence').inspect(sessionId)` 拿 header/events,构造 setup 后传给 `agents.resume({..., setup})`。
    - 可选服务 `ctx.get`(sessionPersistence/agentPresets),webless profile 缺服务时保持原降级(不唤醒→排队),不阻塞启动。
    - 测试:`tests/wake.spec.ts` 9 用例(resolveSessionPreset 5 + composeWakeSetup 4),test 359 全绿、build 通过、strict tsc 零错误。
-3. **B 部分:启动自动恢复扫描(待实施)**:
-   - 插件启动时(apply 末尾,`dispatchReadyTasks` 之后)扫描 `status ∈ {working, submitted, input-required}` 的任务,执行者(`assignedTo`)不在 agents registry → `wakeSession` 唤醒 → 成功则投递「系统恢复通知」(带任务上下文,提醒继续并 report);失败维持现状(offlineGrace 兜底)。
+3. **B 部分:启动自动恢复扫描(已完成,PM 实施)**:
+   - `src/scheduler.ts` 新增 `resumeStrandedTasks`:插件启动时(apply 末尾,`dispatchReadyTasks` 之后)扫描 `status ∈ {working, submitted, input-required}` 的任务,执行者(`assignedTo`)不在 agents registry → `wakeSession` 唤醒 → 成功则投递「系统恢复通知」(带任务上下文,提醒继续并 report);失败维持现状(offlineGrace 兜底)。
    - 按 session 聚合,一个 worker 只收一条通知(即使有多个任务)。
    - 幂等:本次启动已唤醒的不重复(内存 Map);live 执行者的任务不动(避免干扰正在跑的)。
-   - 可配置:`resumeOnStartup` 默认 true。
-4. **C 部分(可选)**:面板快照带「上次异常退出,已恢复 N 个任务」提示,用户知情。
-5. **预期效果**：A+B 落地后,崩溃恢复 = 重启 → 插件自动唤醒所有未完成任务执行者(工具集完整)→ 每工人一条恢复通知继续干活,零人工介入。
+   - 测试:`tests/scheduler.spec.ts` 6 用例(唤醒/聚合去重/live 不碰/无法唤醒跳过/终态忽略/双执行者各一条),test 480 全绿、build 通过、strict tsc 零错误。
+4. **C 部分(已完成,PM 实施)**:面板快照带 `recoveredWorkers`/`recoveryAt`,客户端 TaskPanel 显示「上次启动已自动恢复 N 个滞留任务的工作会话」提示条(可关闭,per-batch 记忆)。测试见 fingerprint/panel 相关断言。
+5. **预期效果**：A+B+C 落地后,崩溃恢复 = 重启 → 插件自动唤醒所有未完成任务执行者(工具集完整)→ 每工人一条恢复通知继续干活,零人工介入。
 
 ---
 

@@ -1,6 +1,6 @@
 /**
- * The model-facing tool surface: fifteen tools over the ledger and the delivery
- * path, named after the A2A operation set where one exists.
+ * The model-facing tool surface: the agent-bus tools over the ledger and the
+ * delivery path, named after the A2A operation set where one exists.
  *
  * The surface stays deliberately small. The reference implementation this
  * draws on grew to 73 tools and had to fold them behind a router to keep the
@@ -40,6 +40,7 @@ import {
   deliverTask,
   notifySession,
 } from './delivery.ts'
+import { TOOL_DOCS, TOOL_NAMES, type ToolName } from './tool-docs.ts'
 import type { ReportStore } from './external.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
 import { isTokenBuckets, staffRoles } from './panel.ts'
@@ -530,6 +531,17 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
+/**
+ * Enforce the flow-name contract (decision 8): 1–20 characters, a concise
+ * name that tells at a glance what the task group is about. Shared by
+ * create_flow and rename_flow so the two never drift.
+ */
+function assertFlowName(name: string): void {
+  if (name.length === 0 || name.length > 20) {
+    throw new Error('流程名不超过 20 字,并简明概括任务组核心内容')
+  }
+}
+
   ctx.tools.register(checkedTool({
     name: 'create_flow',
     description:
@@ -540,9 +552,10 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       + 'failure propagates down the chain automatically. Every dependency of a task must live in '
       + 'the same flow (add the task to the flow first with edit_task flow_id), so one flow is '
       + 'always one DAG and cross-flow references are impossible. The DAG view renders per flow; a '
-      + 'flow whose tasks are all archived moves to the archived section automatically.',
+      + 'flow whose tasks are all archived moves to the archived section automatically. The flow name '
+      + 'must be ≤20 characters and concisely name the task group\'s core.',
     parameters: {
-      name: { type: 'string', required: true, description: 'Flow display name, 1–80 characters.' },
+      name: { type: 'string', required: true, description: 'Flow display name, ≤20 characters (concise name for the task group\'s core content).' },
       description: { type: 'string', description: 'Optional note about the flow.' },
     },
     output: {
@@ -566,9 +579,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     async execute(args, exec) {
       const callerId = requireCaller(exec.agent, 'create_flow')
       const name = String(args.name ?? '').trim()
-      if (name.length === 0 || name.length > 80) {
-        throw new Error('flow name must be 1–80 characters')
-      }
+      assertFlowName(name)
       const description = args.description !== undefined
         ? admitContent(String(args.description), 400)
         : undefined
@@ -603,10 +614,11 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       'Rename a flow you created, optionally replacing its description. The new name must be '
       + 'unique within the workspace — renaming onto an existing flow\'s name is refused with the '
       + 'existing names listed. Pass description to replace it, an empty string to clear it, or '
-      + 'omit it to keep the current note. Only the session that created the flow may rename it.',
+      + 'omit it to keep the current note. Only the session that created the flow may rename it. '
+      + 'The new name must be ≤20 characters and concisely name the task group\'s core.',
     parameters: {
       flow_id: { type: 'string', required: true, description: 'The flow id to rename.' },
-      name: { type: 'string', required: true, description: 'New flow display name, 1–80 characters.' },
+      name: { type: 'string', required: true, description: 'New flow display name, ≤20 characters (concise name for the task group\'s core content).' },
       description: { type: 'string', description: 'Replacement note; empty clears it, omit keeps it.' },
     },
     output: {
@@ -629,9 +641,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     async execute(args, exec) {
       const callerId = requireCaller(exec.agent, 'rename_flow')
       const name = String(args.name ?? '').trim()
-      if (name.length === 0 || name.length > 80) {
-        throw new Error('flow name must be 1–80 characters')
-      }
+      assertFlowName(name)
       const flow = ledger.getFlow(args.flow_id)
       if (flow === undefined) throw new Error(`no such flow "${args.flow_id}"`)
       if (flow.createdBy !== callerId) {
@@ -1944,6 +1954,44 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       // The output schema infers mutable string arrays; copy the readonly
       // result fields so the return is assignable under any inference variant.
       return { ...result, steps: [...result.steps], warnings: [...result.warnings] }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'tool_help',
+    description:
+      'Return the FULL manual of one agent-bus tool as a tool result. The system '
+      + 'prompt carries only a short routing overview; call this before executing '
+      + 'a tool whose exact contract you want to confirm — it discloses the '
+      + 'complete parameter, semantic, and authorization details of that one tool '
+      + 'on demand.',
+    parameters: {
+      tool: {
+        type: 'string',
+        required: true,
+        enum: [...TOOL_NAMES],
+        description: 'The agent-bus tool name to document.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          tool: { type: 'string', required: true },
+          doc: { type: 'string', required: true },
+        },
+      },
+      render: (_args, result) => [{ type: 'text', text: result.doc }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:工具说明书', kind: 'other', rawInput: { tool: args.tool } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:工具说明书', rawInput: result }),
+    async execute(args, exec) {
+      requireCaller(exec.agent, 'tool_help')
+      const name = String(args.tool) as ToolName
+      const doc = TOOL_DOCS[name]
+      if (doc === undefined) throw new Error(`no manual for tool "${name}"`)
+      return { tool: name, doc }
     },
   }))
 }

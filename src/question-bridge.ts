@@ -18,9 +18,46 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { notifySession } from './delivery.ts'
 import type { TaskLedger } from './ledger.ts'
 import { TaskId, type PendingQuestion, type PendingQuestionOption, type QuestionAnswer, type QuestionAnswerItem } from './types.ts'
+
+/**
+ * The user message that claimed the current open turn, or `undefined`.
+ *
+ * The A2A judge answers "is the caller mid-a-task?" from the injected context
+ * rather than the ledger's `findWorkingFor`: a session can hold a `working`
+ * task row yet be chatting (a plain user turn) — only the turn's first
+ * `user/message` tells the two apart. The first message is the queued input
+ * that opened the turn; injected contexts (`agent.inject()` file notices,
+ * skill content, AGENTS.md) are appended afterwards, so a task-triggered turn
+ * starts with the `<dsh-agent-bus ...>` relay.
+ *
+ * @param session - the calling agent's session log.
+ * @returns the turn's first user message, or `undefined` when no turn is open.
+ */
+export function currentTurnTaskMessage(session: Session): UserMessage | undefined {
+  const events: readonly SessionEvent[] = session.events ?? []
+  // The latest turn boundary decides open/closed: a trailing turn/end closes
+  // the turn (no open turn); a trailing turn/start leaves one open.
+  let openFrom = -1
+  for (let index = events.length - 1; index >= 0; index--) {
+    const type = events[index]?.type
+    if (type === 'turn/end') return undefined
+    if (type === 'turn/start') {
+      openFrom = index
+      break
+    }
+  }
+  if (openFrom === -1) return undefined
+  for (let index = openFrom + 1; index < events.length; index++) {
+    const event = events[index]
+    if (event?.type === 'user/message') return event.data
+  }
+  return undefined
+}
 
 /**
  * One registered, still-pending question ask, awaiting the initiator's
@@ -248,11 +285,22 @@ export function registerQuestionBridge(
     if (exec.name !== 'ask_user_question') return next()
     // Agent-less calls have no session to judge and no task to attribute.
     if (exec.agent === undefined) return next()
-    // user↔A: the caller is not executing an agent-bus task — leave the
-    // original chain (the human answerer) in charge.
+    // user↔A vs A2A, judged from the injected context (decision: replace
+    // findWorkingFor): the caller is A2A only when the CURRENT open turn's
+    // first user/message is an agent-bus-task relay that owns a ledger row
+    // assigned to the caller. Every other shape — no open turn, a non-task
+    // source (a direct human prompt, an inject() context), a notification
+    // message carrying the same source kind but no ledger row, or a task
+    // assigned to someone else — delegates to next() (the original chain
+    // would not forward anyway). `findWorkingFor` is retained on the ledger
+    // for its documented semantics but no longer drives the bridge.
     const caller = exec.agent
-    const task = ledger.findWorkingFor(caller.id)
+    const msg = currentTurnTaskMessage(caller.session)
+    if (msg === undefined) return next()
+    if (msg.source.kind !== 'agent-bus-task') return next()
+    const task = ledger.findByMessage(msg.id)
     if (task === undefined) return next()
+    if (task.assignedTo !== caller.id) return next()
     const parsed = parseQuestions(exec.arguments)
     // Malformed arguments are not ours to interpret; the original tool owns
     // the schema error surface.

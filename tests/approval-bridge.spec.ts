@@ -245,9 +245,15 @@ describe('决策6 approval-bridge：A2A 转交', () => {
       reason: '不需要写仓库外文件',
       suggestion: '改用 workspace 内的路径,或调整任务范围',
     }, pm)
-    expect(answered).toEqual({ approvalId, outcome: 'rejected' })
+    // 拒绝时理由+suggestion 随返回同步附上（主通道），不再只靠旁路。
+    expect(answered).toEqual({
+      approvalId,
+      outcome: 'rejected',
+      reason: '不需要写仓库外文件',
+      suggestion: '改用 workspace 内的路径,或调整任务范围',
+    })
 
-    // 子 agent 收到旁路通知：理由 + 方案一起送达（ApprovalOutcome 无 reason 通道）。
+    // 子 agent 仍收到旁路通知（冗余，与返回面一致）。
     h.notify()
     expect(worker.followups).toHaveLength(1)
     const workerNotice = textOf(worker.followups[0])

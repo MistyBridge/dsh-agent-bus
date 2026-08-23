@@ -58,6 +58,11 @@
 
 ## 已实现
 
+**2026-08-23(A2A vs user↔A 判定改为注入上下文)**
+- `currentTurnTaskMessage(session)`(question-bridge.ts):从 `session.events` 尾部取最近 turn 边界——尾随 `turn/end` 则无 open turn,尾随 `turn/start` 则 open,取其内**首个** `user/message`(避开 `agent.inject()` 追加的上下文 source)。
+- `tools/execute` 监听器把 `ledger.findWorkingFor(caller.id)` 替换为组合判定:currentTurnTaskMessage → undefined 则 `next()`;source.kind ≠ `agent-bus-task` 则 `next()`;`findByMessage(msg.id)` 未命中(通知消息)则 `next()`;`task.assignedTo !== caller.id` 则 `next()`;命中才作 A2A(用 `task.assignedBy` 转发)。`findWorkingFor` 语义保留在 ledger(文档写明)但不再驱动桥接——判定改为「当前 open turn 是不是任务上下文」,能区分「正在执行任务」vs「只是有任务记录但当前 turn 是闲聊」。
+- 测试:question-bridge.spec.ts 全部 A2A/user↔A 断言改为真实 `session.events` 驱动;补齐边界:无 open turn、首个 user/message 是人类提示/注入上下文(plugin)、turn 已关闭、通知消息同 source.kind 但无 ledger 行、任务 assignedTo 非调用者。
+
 **2026-08-23(决策 8:流程命名管理)**
 - create_flow 同工作区重名拒绝:检查放在 ledger.createFlow 的 enqueue 内(串行写入链,并发安全),报错含「该工作区已有同名流程『xxx』」并列出已有流程名。
 - 无意义名(纯数字/纯符号,无任何字母字符)放行但返回 `suggestion` 字段:「建议格式:目标 + 阶段,如『电商站上线:Phase 1 基建』」(create_flow output schema 增加可选 suggestion)。

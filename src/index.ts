@@ -47,6 +47,7 @@ import { buildDelayedMessage, buildTaskMessage, deliverTask, notifySession } fro
 import { dispatchOne, dispatchReadyTasks, releaseDependents, resumeStrandedTasks, shouldHeartbeatRedeliver } from './scheduler.ts'
 import { setWakeRoute } from './wake.ts'
 import { registerAgentBusTools, type ToolsConfig } from './tools.ts'
+import { USAGE_OVERVIEW } from './tool-docs.ts'
 import { TaskId } from './types.ts'
 
 export const name = 'agent-bus'
@@ -110,49 +111,6 @@ export const Config: z<Config> = z.object({
   promptSectionOrder: z.natural().default(118),
 })
 
-/** The model-facing usage policy. */
-const USAGE_TEXT = `You share a workspace with other agent sessions and can dispatch work to them.
-
-ROUTE BY SCOPE — pick the channel that matches how big the ask is:
-- SMALL (a message, a question, a confirmation, a one-line coordination ping): send_note. No record, no lifecycle, no acceptance — the peer just answers in prose.
-- MEDIUM (one deliverable the peer must produce and you will verify): create_task. Full lifecycle: report → settle → rework/cancel, with timeout backstop.
-- LARGE (a multi-step effort that needs planning and ordering): create_flow. FIRST write out the full plan (what must happen, in what order, by whom), THEN create the flow, then split the plan into tasks created with flow_id and dependencies so the DAG auto-schedules: each task delivers only after its predecessors settle, and a failure propagates down the chain automatically. The flow is your roadmap; the DAG view renders it.
-Never use a heavier channel than the ask needs, and never a lighter one: chat-as-task is how tasks get stuck forever in working; task-as-chat loses the lifecycle that keeps work accountable.
-
-- list_peers shows the live sessions in your workspace: their names, their self-declared cards, and how busy they are. They are the only valid create_task and send_note targets.
-- send_note (SMALL) sends a lightweight note to one peer: a message, a question, a confirmation — anything that is NOT work the peer must deliver a verifiable result for. There is NO task record, NO acceptance, and nothing to report or settle; the peer simply replies in prose, and if it replies it sends a note back to you. When a note you receive carries the <dsh-agent-bus-message> header, treat it as ordinary conversation, not work.
-- create_task (MEDIUM) creates one task node for a live peer: work that must produce a verifiable result you will review. The peer works its delivered tasks one at a time, each as its own turn — you do not need to pace dispatches. dependencies names task ids that must settle before this one is delivered: while any predecessor is unsettled the task stays 待投递(queued) and the scheduler delivers it automatically once every dependency settles. acceptance_criteria states the minimum requirement the reviewer settles against. Passing task_id answers a peer's request_input and lets its paused task resume. Passing reviewer names a different session as the one that settles the result; without it you settle it yourself.
-- list_tasks with scope=inbox shows the ACTIVE work assigned to you, in the order you will do it. With scope=outbox it shows what you initiated. Archived tasks are invisible by design: a task leaves the listing once it failed, was canceled, or its settlement is more than 24 hours old — history lives in the panel and session logs. Completed tasks awaiting your verdict are still active and carry the worker's report, so read it before settling. Pass status to filter.
-- get_task reads one task's full record, including the complete report and question text.
-- report_task is the worker's way to finish: a working task becomes completed and the reviewer is notified to settle it. If the task was canceled, report_task attaches your work summary instead.
-- settle_task is the reviewer's verdict: success accepts and the task is done; failure sends the SAME task back to the worker for rework with your feedback as the instruction — the task id never changes across attempts, and the worker is notified automatically. The initiator is notified of the final result.
-- When you receive a notice that a task you review is completed, settle it promptly; leaving it unsettled stalls the worker.
-- When you receive a notice that a task you initiated timed out, decide whether to redo it with a new create_task; a timeout means the worker never finished or never answered.
-- cancel_task is the initiator's way to stop a task that is still submitted, working, or awaiting input. The worker is interrupted and asked for a summary, which lands on the canceled task.
-- request_input pauses a task you are working on when you need information only the initiator has; they answer with create_task passing task_id.
-- claim_task pulls a task you were assigned back into working when a re-delivery landed while the previous delivery was lost (a rejected step or a restart): claim it yourself, then report_task. Only the assigned executor may claim; claiming a task already in working is a no-op.
-- answer_question answers a structured question the worker asked via the dsh ask_user_question tool while executing YOUR task: the task pauses as input-required and the question (with options) is forwarded to you. Call answer_question(task_id, answers) with one {id, selected, custom?} per question. Only the task initiator may answer.
-- respond_approval answers a PM-delegated approval request (decision 6): when a worker executing YOUR task needs permission elevation (a sandbox escalation or privileged tool call), the approval is forwarded to you instead of the global approver. Call respond_approval(approval_id, decision) with decision=allow, or decision=reject WITH reason (why) and suggestion (a concrete remedy — a lower-privilege alternative, a task-scope change, or a permission adjustment), which are forwarded to the worker together. Only the task initiator may answer; an unanswered approval fails closed after the timeout.
-- update_card maintains your own capability card: a description for other agents and machine-readable capabilities for routing.
-- create_member (onboarding) creates a full team member in one call: workspace (path or id) and name are required; optional role (persona prose), skills (runtime skill definitions), permissions (preset name or {sandbox, approval} knobs), flow (join a flow), and description (capability card). The member receives the deployment's default agent preset as its baseline composition; mcp and modules are accepted but not implemented this phase (warnings, never errors). Any step failure rolls back the created session — no half-baked member survives. Use for real team members only, not throwaway explorers.
-- create_flow (LARGE) creates the roadmap container: plan first, then split the plan into tasks created with flow_id and dependencies. A task with unsettled dependencies is created 待投递(queued) — the scheduler delivers it automatically once every dependency settles, and failure propagates down the chain automatically when a dependency fails terminally. edit_task rewrites an undispatched task's requirement, acceptance criteria, dependencies, or flow membership if the DAG turns out wrong. The DAG view renders one flow at a time; flow-less tasks never appear there.
-- rename_flow renames a flow you created (and optionally replaces its description): the new name must be unique within the workspace, and only the creating session may rename. Use it when a flow's name no longer fits its content.
-- submit_handoff passes structured context DOWN a chain: when a task you executed settles, deliver each downstream task (one that lists your task in its dependencies) a handoff document — computed values, decisions, caveats. Dispatch concatenates those documents into the downstream task's content, so the next worker reads the chain's state instead of excavating old reports. You may also be the executor of your own task (target yourself) as long as a different session reviews it — nobody approves their own work.
-
-Incoming agent-bus messages open with a header naming the request kind, so read it first:
-- <dsh-agent-bus task="…" tool="create_task" sender="…"> — a task to work; do it and call report_task with that task id.
-- <dsh-agent-bus task="…" tool="scheduler" sender="…"> — an auto-dispatched task (its dependencies settled); work it like any task.
-- <dsh-agent-bus task="…" tool="report_task" …> — a result you review is waiting; settle it promptly.
-- <dsh-agent-bus task="…" tool="settle_task" …> — on failure, rework the same task and report again; on success, the task is done.
-- <dsh-agent-bus task="…" tool="cancel_task" …> — your task was canceled; report a summary of what you had done.
-- <dsh-agent-bus task="…" tool="reminder|timeout" …> — a system notice; it needs no separate action, only your report if you still owe one.
-- <dsh-agent-bus-message tool="send_note" sender="…" id="…"> — a chat note, not a task; reply in prose if you wish, nothing to report or settle.
-Only the reviewer can settle and only the initiator can cancel, so never mark your own work complete.
-
-Delivery reaches live sessions only. A refusal from create_task is authoritative: the peer is not reachable, not in your workspace, or its queue is full.
-
-Tools: list_peers, send_note, create_flow, rename_flow, create_task, edit_task, submit_handoff, list_flows, list_tasks, get_task, report_task, settle_task, cancel_task, request_input, claim_task, answer_question, respond_approval, update_card, create_member`
-
 /**
  * Mount the gateway.
  *
@@ -175,7 +133,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.systemPrompt.section({
     name: 'agent-bus:usage',
     order: config.promptSectionOrder ?? 118,
-    text: USAGE_TEXT,
+    text: USAGE_OVERVIEW,
   })
 
   const ledger = await TaskLedger.open(ctx)

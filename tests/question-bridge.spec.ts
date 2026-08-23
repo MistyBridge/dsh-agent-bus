@@ -20,8 +20,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { clearNoticeMerges, flushNoticeMerges } from '../src/delivery.ts'
 import { TaskLedger } from '../src/ledger.ts'
 import {
@@ -63,6 +65,58 @@ function askExec(agent: FakeAgent | undefined, questions: unknown, signal = new 
     arguments: { questions },
     signal,
   }
+}
+
+/** 构造一个 user/message 事件(带 source)以拼装 session.events。 */
+function messageEvent(message: UserMessage, seq = 1): SessionEvent {
+  return { type: 'user/message', seq, time: 0, data: message }
+}
+
+/** 任务投递消息(agent-bus-task relay source)。 */
+function taskMessage(messageId: string, sender: SessionId = SESSION_A): UserMessage {
+  return {
+    id: MessageId(messageId),
+    role: 'user',
+    content: [{ type: 'text', text: `<dsh-agent-bus task="t1" tool="create_task" sender="${sender}">\ndo the thing` }],
+    source: { kind: 'agent-bus-task', form: 'relay', senderSessionId: sender },
+  }
+}
+
+/** 直接人类提示消息(user source)。 */
+function humanMessage(messageId: string): UserMessage {
+  return {
+    id: MessageId(messageId),
+    role: 'user',
+    content: [{ type: 'text', text: 'hello' }],
+    source: { kind: 'user' },
+  }
+}
+
+/** 注入上下文消息(plugin source,agent.inject() 一类)。 */
+function injectMessage(messageId: string): UserMessage {
+  return {
+    id: MessageId(messageId),
+    role: 'user',
+    content: [{ type: 'text', text: 'injected context' }],
+    source: { kind: 'plugin', plugin: 'agent-instructions' },
+  }
+}
+
+/** 打开 turn 的事件序列:turn/start + 后续 user/message(默认没有);可再加 turn/end 关闭。 */
+function turns(...messages: UserMessage[]): SessionEvent[] {
+  const events: SessionEvent[] = [{ type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } }]
+  for (let index = 0; index < messages.length; index++) {
+    events.push(messageEvent(messages[index]!, index + 1))
+  }
+  return events
+}
+
+/** 一个已关闭的 turn(open turn 不存在):turn/start 后紧跟 turn/end。 */
+function closedTurn(): SessionEvent[] {
+  return [
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    { type: 'turn/end', seq: 1, time: 0, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
 }
 
 /** 测试基座：真实 ledger + 捕获的 tools/execute 监听 + 已注册的 answer_question。 */
@@ -163,13 +217,14 @@ async function createBridgeHarness(questionTimeoutMs = 60_000): Promise<BridgeHa
   }
 }
 
-/** 建立一个 A 派发给 B 且已进入 working 的任务。 */
-async function workingTask(h: BridgeHarness, id = 't1'): Promise<void> {
+/** 建立一个 A 派发给 B 且已进入 working 的任务;messageId 与 worker 的 turn 消息对应。 */
+async function workingTask(h: BridgeHarness, id = 't1', messageId = 'msg-1'): Promise<void> {
   const created = await h.ledger.record(makeNewTask({
     id: TaskId(id),
     assignedBy: SESSION_A,
     assignedTo: SESSION_B,
     workspacePath: WORKSPACE,
+    messageId,
   }), 20)
   expect(created.ok).toBe(true)
   const advanced = await h.ledger.transition(TaskId(id), 'working')
@@ -193,7 +248,7 @@ describe('决策9 question-bridge：A2A 转发', () => {
 
   it('worker 任务中提问 → 任务 input-required、问题入记录、PM 被通知、回答后 worker 收到答案', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     h.agents.add(worker)
     h.agents.add(pm)
@@ -211,7 +266,7 @@ describe('决策9 question-bridge：A2A 转发', () => {
       header: 'Choose',
       multiSelect: false,
     })
-    expect(paused?.pendingQuestions?.[0].options.map(option => option.label)).toEqual(['Option A', 'Option B'])
+    expect(paused?.pendingQuestions?.at(0)?.options.map(option => option.label)).toEqual(['Option A', 'Option B'])
     expect(next).not.toHaveBeenCalled()
 
     // PM 收到含问题与选项的通知。
@@ -244,7 +299,7 @@ describe('决策9 question-bridge：A2A 转发', () => {
 
   it('PM 自己执行任务时提问 → 转给它的发起方，而不是自己', async () => {
     const h = await createBridgeHarness()
-    const pm = makeAgent(SESSION_A)
+    const pm = makeAgent(SESSION_A, { events: turns(taskMessage('msg-1')) })
     const reviewer = makeAgent(SESSION_REVIEWER)
     h.agents.add(pm)
     h.agents.add(reviewer)
@@ -253,6 +308,7 @@ describe('决策9 question-bridge：A2A 转发', () => {
       assignedBy: SESSION_REVIEWER,
       assignedTo: SESSION_A,
       workspacePath: WORKSPACE,
+      messageId: 'msg-1',
     }), 20)
     expect(created.ok).toBe(true)
     await h.ledger.transition(TaskId('pm-task'), 'working')
@@ -282,7 +338,7 @@ describe('决策9 question-bridge：A2A 转发', () => {
 
   it('问题含 custom 自由文本时随答案返回', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     h.agents.add(worker)
     h.agents.add(pm)
@@ -303,12 +359,12 @@ describe('决策9 question-bridge：A2A 转发', () => {
   })
 })
 
-describe('决策9 question-bridge：user↔A 不转发', () => {
+describe('决策9 question-bridge：user↔A 不转发(注入上下文判定)', () => {
   afterEach(() => {
     clearNoticeMerges()
   })
 
-  it('无 working 任务的调用者 → next() 被调用，走原链路', async () => {
+  it('无 open turn(无事件)→ next() 被调用,走原链路', async () => {
     const h = await createBridgeHarness()
     const worker = makeAgent(SESSION_B)
     h.agents.add(worker)
@@ -324,9 +380,90 @@ describe('决策9 question-bridge：user↔A 不转发', () => {
     await h.dispose()
   })
 
-  it('非 ask_user_question 工具 → 即使有 working 任务也不拦截', async () => {
+  it('有 open turn 但首个 user/message 是直接人类提示 → next()(即使有 working 任务)', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(humanMessage('hi-1')) })
+    h.agents.add(worker)
+    await workingTask(h)
+
+    const { promise, next } = h.invoke(askExec(worker, ONE_QUESTION))
+    const outcome = await promise
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ isError: false, value: { answers: [] } })
+    // 任务保持 working,未被当作 A2A 暂停。
+    expect(h.ledger.get(TaskId('t1'))?.status).toBe('working')
+    expect(h.questions.size).toBe(0)
+    await h.dispose()
+  })
+
+  it('有 open turn 但首个 user/message 是注入上下文(plugin)→ next()', async () => {
+    const h = await createBridgeHarness()
+    const worker = makeAgent(SESSION_B, { events: turns(injectMessage('inj-1')) })
+    h.agents.add(worker)
+    await workingTask(h)
+
+    const { promise, next } = h.invoke(askExec(worker, ONE_QUESTION))
+    const outcome = await promise
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ isError: false, value: { answers: [] } })
+    expect(h.ledger.get(TaskId('t1'))?.status).toBe('working')
+    expect(h.questions.size).toBe(0)
+    await h.dispose()
+  })
+
+  it('turn 已关闭(turn/end 紧跟 turn/start)→ next()', async () => {
+    const h = await createBridgeHarness()
+    const worker = makeAgent(SESSION_B, { events: closedTurn() })
+    h.agents.add(worker)
+    await workingTask(h)
+
+    const { promise, next } = h.invoke(askExec(worker, ONE_QUESTION))
+    const outcome = await promise
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ isError: false, value: { answers: [] } })
+    await h.dispose()
+  })
+
+  it('通知消息同 source.kind 但 findByMessage 未命中 → next()', async () => {
+    const h = await createBridgeHarness()
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('notif-1')) })
+    h.agents.add(worker)
+
+    const { promise, next } = h.invoke(askExec(worker, ONE_QUESTION))
+    const outcome = await promise
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ isError: false, value: { answers: [] } })
+    // 无 ledger 行可断言——该消息不是投递。
+    expect(h.ledger.listAll()).toHaveLength(0)
+    expect(h.questions.size).toBe(0)
+    await h.dispose()
+  })
+
+  it('任务 assignedTo 不是调用者 → next()', async () => {
+    const h = await createBridgeHarness()
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
+    h.agents.add(worker)
+    const created = await h.ledger.record(makeNewTask({
+      id: TaskId('t-other'),
+      assignedBy: SESSION_A,
+      assignedTo: SESSION_A,
+      workspacePath: WORKSPACE,
+      messageId: 'msg-1',
+    }), 20)
+    expect(created.ok).toBe(true)
+    await h.ledger.transition(TaskId('t-other'), 'working')
+
+    const { promise, next } = h.invoke(askExec(worker, ONE_QUESTION))
+    const outcome = await promise
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(outcome).toMatchObject({ isError: false, value: { answers: [] } })
+    expect(h.questions.size).toBe(0)
+    await h.dispose()
+  })
+
+  it('非 ask_user_question 工具 → 即使有任务 turn 也不拦截', async () => {
+    const h = await createBridgeHarness()
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     h.agents.add(worker)
     await workingTask(h)
 
@@ -356,7 +493,7 @@ describe('决策9 question-bridge：user↔A 不转发', () => {
 
   it('questions 参数畸形 → 保守放行 next()', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     h.agents.add(worker)
     await workingTask(h)
 
@@ -380,7 +517,7 @@ describe('决策9 answer_question：鉴权与校验', () => {
 
   it('仅 assignedBy（PM）可回答；worker 与第三方越权被拒', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     const stranger = makeAgent(SESSION_REVIEWER)
     h.agents.add(worker)
@@ -423,7 +560,7 @@ describe('决策9 answer_question：鉴权与校验', () => {
 
   it('答案校验：未知问题 id、非选项选择、多选超限、custom 类型错误', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     h.agents.add(worker)
     h.agents.add(pm)
@@ -460,7 +597,7 @@ describe('决策9 超时与任务死亡兜底', () => {
 
   it('PM 不响应 → 超时 fail-closed，worker 收到 isError、任务回 working', async () => {
     const h = await createBridgeHarness(20)
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     h.agents.add(worker)
     h.agents.add(pm)
@@ -480,7 +617,7 @@ describe('决策9 超时与任务死亡兜底', () => {
 
   it('任务死亡（failed/canceled）→ 挂起提问被 reject，worker 收到明确错误', async () => {
     const h = await createBridgeHarness()
-    const worker = makeAgent(SESSION_B)
+    const worker = makeAgent(SESSION_B, { events: turns(taskMessage('msg-1')) })
     const pm = makeAgent(SESSION_A)
     h.agents.add(worker)
     h.agents.add(pm)

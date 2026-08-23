@@ -18,7 +18,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import type { ReportStore } from '../../src/external.ts'
@@ -33,6 +33,8 @@ export interface FakeAgentOptions {
   readonly cwd?: string | null
   readonly origin?: string
   readonly status?: 'running' | 'idle'
+  /** 附加到假 session 的事件日志（决策/R1:注入上下文判定的 session.events 面）。 */
+  readonly events?: readonly SessionEvent[]
 }
 
 /**
@@ -68,6 +70,7 @@ export function makeAgent(id: SessionId, options: FakeAgentOptions = {}): FakeAg
         ...(options.cwd === null ? {} : { cwd: options.cwd ?? WORKSPACE }),
         ...(options.origin !== undefined ? { origin: options.origin } : {}),
       },
+      ...(options.events !== undefined ? { events: options.events } : {}),
     },
     followups,
     steers,
