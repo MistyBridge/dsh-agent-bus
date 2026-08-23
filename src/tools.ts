@@ -124,37 +124,35 @@ function view(task: TaskRecord): TaskView {
  * @param t - the projected row.
  * @returns the text lines for one row.
  */
-/** Settled rows stay in the active listing for this long (mirror of the panel). */
-const ARCHIVE_AGE_MS = 24 * 60 * 60 * 1000
 
 /**
  * Whether one row is visible to the agent tools — the active set only.
  *
- * Archived tasks are invisible to list_tasks by design, using the SAME
- * archive rule as the panel: a terminal failure/cancel/reject leaves the
- * listing immediately, and a settled success leaves once the settlement is
- * more than 24h old (the panel's archive-phase age). Everything the agent
- * can still act on — submitted, working, awaiting input, and a completed
- * row awaiting its verdict — stays visible. History lives in the panel and
- * session logs; get_task still reads an archived row by id for a reference
- * that reached the agent before archiving.
+ * Archiving is a user action, never automatic: a task stays in the active set
+ * until the user archives it (`archive_task`), and unarchiving restores it.
+ * Nothing in the lifecycle machine moves a row out on its own.
  *
  * @param row - the ledger row.
- * @param now - current epoch milliseconds.
+ * @param now - kept for call-site compatibility; archive is manual, so the
+ *   clock no longer drives visibility.
  * @returns `true` when the row belongs to the active set.
  */
-export function isActiveTask(row: TaskRecord, now: number): boolean {
-  if (row.status === 'failed' || row.status === 'canceled' || row.status === 'rejected') {
-    return false
-  }
-  if (row.status === 'completed') {
-    // Awaiting the verdict: still active. Settled: active for the archive
-    // grace period only.
-    if (row.outcome === undefined) return true
-    return now - Date.parse(row.updatedAt) < ARCHIVE_AGE_MS
-  }
-  // queued (待投递) counts as active: the scheduler is still driving it.
-  return true
+export function isActiveTask(row: TaskRecord, _now: number): boolean {
+  return row.archived !== true
+}
+
+/**
+ * Whether one row has reached a terminal settled verdict. Mirrors the panel's
+ * `isSettled`: a completed row is settled once a verdict is recorded; failed
+ * and canceled rows count as settled regardless of a verdict.
+ *
+ * @param row - the ledger row.
+ * @returns `true` when the row is settled.
+ */
+function isSettledTask(row: TaskRecord): boolean {
+  return row.status === 'completed'
+    ? row.outcome !== undefined
+    : row.status === 'failed' || row.status === 'canceled'
 }
 
 export function renderTaskRow(t: TaskView): string {
@@ -611,10 +609,10 @@ function assertFlowName(name: string): void {
   ctx.tools.register(checkedTool({
     name: 'rename_flow',
     description:
-      'Rename a flow you created, optionally replacing its description. The new name must be '
+      'Rename a flow, optionally replacing its description. The new name must be '
       + 'unique within the workspace — renaming onto an existing flow\'s name is refused with the '
       + 'existing names listed. Pass description to replace it, an empty string to clear it, or '
-      + 'omit it to keep the current note. Only the session that created the flow may rename it. '
+      + 'omit it to keep the current note. Any session in the flow\'s workspace may rename it. '
       + 'The new name must be ≤20 characters and concisely name the task group\'s core.',
     parameters: {
       flow_id: { type: 'string', required: true, description: 'The flow id to rename.' },
@@ -644,8 +642,11 @@ function assertFlowName(name: string): void {
       assertFlowName(name)
       const flow = ledger.getFlow(args.flow_id)
       if (flow === undefined) throw new Error(`no such flow "${args.flow_id}"`)
-      if (flow.createdBy !== callerId) {
-        throw new Error(`仅流程创建者可改名:flow "${flow.id}" was created by another session`)
+      const caller = ctx.agents.get(callerId)
+      if (caller === undefined) throw new Error('rename_flow: the calling session is not a live agent')
+      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+      if (callerWorkspace !== flow.workspacePath) {
+        throw new Error(`仅工作区成员可改名:flow "${flow.id}" is in a different workspace`)
       }
       const description = args.description !== undefined
         ? admitContent(String(args.description), 400)
@@ -899,14 +900,15 @@ function assertFlowName(name: string): void {
         .filter(flow => flow.workspacePath === workspacePath)
         .map(flow => {
           const tasks = all.filter(row => row.flowId === flow.id)
-          const unsettled = tasks.filter(row => isActiveTask(row, Date.now()))
+          const unsettled = tasks.filter(row => !isSettledTask(row))
           return {
             id: flow.id,
             name: flow.name,
             ...(flow.description !== undefined ? { description: flow.description } : {}),
             taskCount: tasks.length,
             unsettledCount: unsettled.length,
-            archived: unsettled.length === 0,
+            // Archive is a user action, never derived from task state.
+            archived: flow.archived === true,
           }
         })
       return flows
@@ -932,7 +934,7 @@ function assertFlowName(name: string): void {
     parameters: {
       target: { type: 'string', required: true, description: 'Session id of the peer, from list_peers.' },
       content: { type: 'string', required: true, description: 'The task instruction or answer.' },
-      title: { type: 'string', required: true, description: 'Short display title (1–80 chars); lists and DAG nodes display it.' },
+      title: { type: 'string', required: true, description: 'Short display title (1–20 chars); lists and DAG nodes display it.' },
       mode: {
         type: 'string',
         enum: ['followup', 'steer'],
@@ -1136,7 +1138,7 @@ function assertFlowName(name: string): void {
       },
       title: {
         type: 'string',
-        description: 'New display title (1–80 chars); omit to keep the current one.',
+        description: 'New display title (1–20 chars); omit to keep the current one.',
       },
       flow_id: {
         type: 'string',
@@ -1868,7 +1870,7 @@ function assertFlowName(name: string): void {
       + 'session with its own skills, permissions, and card.',
     parameters: {
       workspace: { type: 'string', required: true, description: 'Workspace path or id the new member is bound to.' },
-      name: { type: 'string', required: true, description: 'Session name (title); whitespace-padded values are trimmed.' },
+      name: { type: 'string', required: true, description: 'Session name (title), 1–20 chars; whitespace-padded values are trimmed.' },
       role: { type: 'string', description: 'Role/persona prose injected as a system-prompt section.' },
       skills: {
         type: 'array',
@@ -1950,7 +1952,13 @@ function assertFlowName(name: string): void {
         agentPresets: ctx.get('agentPresets') as PresetMountHost | undefined,
         ledger,
       }
-      const result = await onboardMember(host, parsed.plan)
+      // The new agent renders `{{model}}` from its options.model; default it to
+      // the caller's model so the member session can assemble its persona.
+      const callerModel = (caller as { options?: { model?: string } }).options?.model
+      const modelForMember = callerModel !== undefined
+        ? { ...parsed.plan, model: callerModel }
+        : parsed.plan
+      const result = await onboardMember(host, modelForMember)
       // The output schema infers mutable string arrays; copy the readonly
       // result fields so the return is assignable under any inference variant.
       return { ...result, steps: [...result.steps], warnings: [...result.warnings] }
@@ -1992,6 +2000,98 @@ function assertFlowName(name: string): void {
       const doc = TOOL_DOCS[name]
       if (doc === undefined) throw new Error(`no manual for tool "${name}"`)
       return { tool: name, doc }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'archive_task',
+    description:
+      'Mark one task archived or unarchived (manual, never automatic). Archiving is a visibility '
+      + 'choice: it hides the row from list_tasks and the active listing; unarchiving restores it. '
+      + 'A queued, working, or completed task may be archived, and the change is reversible. Nothing '
+      + 'in the lifecycle machine archives a task on its own.',
+    parameters: {
+      task_id: { type: 'string', required: true, description: 'The ledger task id to toggle.' },
+      archived: {
+        type: 'boolean',
+        description: 'true archives (default), false unarchives.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: 'string', required: true },
+          status: { type: 'string', required: true },
+          archived: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `任务 ${result.taskId} [${result.status}] 已${result.archived ? '归档' : '取消归档'}`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:归档任务', kind: 'other', rawInput: args }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:归档任务', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'archive_task')
+      const taskId = TaskId(args.task_id)
+      const task = ledger.get(taskId)
+      if (task === undefined) throw new Error(`no such task "${taskId}"`)
+      if (!canReadTask(task, callerId)) throw new Error(`task "${taskId}" is not visible to you`)
+      const archived = args.archived !== false
+      const archivedRes = await ledger.archiveTask(taskId, archived)
+      if (!archivedRes.ok) throw new Error(archivedRes.message)
+      return { taskId: String(taskId), status: archivedRes.task.status, archived }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'archive_flow',
+    description:
+      'Mark one flow archived or unarchived (manual, never automatic). A flow stays active until '
+      + 'you archive it, and archiving is not derived from its tasks; unarchiving restores it. Only '
+      + 'the flow creator may archive it.',
+    parameters: {
+      flow_id: { type: 'string', required: true, description: 'The flow id to toggle.' },
+      archived: {
+        type: 'boolean',
+        description: 'true archives (default), false unarchives.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flowId: { type: 'string', required: true },
+          name: { type: 'string', required: true },
+          archived: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `流程 『${result.name}』 已${result.archived ? '归档' : '取消归档'}`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:归档流程', kind: 'other', rawInput: args }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:归档流程', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'archive_flow')
+      const flowId = String(args.flow_id)
+      const flow = ledger.getFlow(flowId)
+      if (flow === undefined) throw new Error(`no such flow "${flowId}"`)
+      const caller = ctx.agents.get(callerId)
+      if (caller === undefined) throw new Error('archive_flow: the calling session is not a live agent')
+      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+      if (callerWorkspace !== flow.workspacePath) {
+        throw new Error(`flow "${flowId}" is in a different workspace`)
+      }
+      const archived = args.archived !== false
+      const archivedRes = await ledger.archiveFlow(flowId, archived)
+      if (!archivedRes.ok) throw new Error(archivedRes.message)
+      return { flowId, name: archivedRes.flow.name, archived }
     },
   }))
 }

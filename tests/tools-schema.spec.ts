@@ -207,6 +207,10 @@ function maximalValueOf(name: string): unknown {
         warnings: ['a warning'],
         flow: { id: 'f1', name: 'Flow' },
       }
+    case 'archive_task':
+      return { taskId: 't1', status: 'completed', archived: true }
+    case 'archive_flow':
+      return { flowId: 'f1', name: 'Flow', archived: true }
     case 'update_card':
       return { description: 'desc', capabilities: [{ id: 'code', label: 'Coding' }] }
     case 'tool_help':

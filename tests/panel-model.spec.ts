@@ -436,21 +436,22 @@ describe('archive rules', () => {
     expect(isArchived(view({ status: 'archived' }))).toBe(true)
   })
 
-  it('isArchived archives a settled row at exactly the 24h age', () => {
+  it('isArchived does NOT archive a settled row by age (manual only)', () => {
     const task = view({ settled: true, status: 'completed', outcome: 'success', updatedMs: ARCHIVE_AGE_MS })
-    expect(isArchived(task)).toBe(true)
+    expect(isArchived(task)).toBe(false)
+    expect(isArchived({ ...task, updatedMs: ARCHIVE_AGE_MS + 365 * 24 * 60 * 60 * 1000 })).toBe(false)
   })
 
-  it('isArchived keeps a settled row one ms below the 24h age', () => {
-    const task = view({ settled: true, status: 'completed', outcome: 'success', updatedMs: ARCHIVE_AGE_MS - 1 })
-    expect(isArchived(task)).toBe(false)
+  it('isArchived archives only a manually archived row', () => {
+    expect(isArchived(view({ archived: true }))).toBe(true)
+    expect(isArchived(view({ archived: false }))).toBe(false)
   })
 
   it('isArchived never archives an unsettled row however old', () => {
     expect(isArchived(view({ settled: false, status: 'working', updatedMs: ARCHIVE_AGE_MS * 2 }))).toBe(false)
   })
 
-  it('activeTabTasks keeps in-progress work and fresh completed rows of live executors', () => {
+  it('activeTabTasks keeps every non-archived row (no automatic exclusion)', () => {
     const tasks = [
       view({ id: 'w', settled: false, status: 'working' }),
       view({ id: 'fresh', settled: true, status: 'completed', outcome: 'success', updatedMs: 1000 }),
@@ -458,14 +459,18 @@ describe('archive rules', () => {
       view({ id: 'failed', settled: true, status: 'failed' }),
       view({ id: 'offline', settled: false, status: 'submitted', executorLive: false }),
     ]
-    expect(activeTabTasks(tasks).map(t => t.id)).toEqual(['w', 'fresh'])
+    expect(activeTabTasks(tasks).map(t => t.id)).toEqual(['w', 'fresh', 'old', 'failed', 'offline'])
   })
 
   it('activeTabTasks keeps a completed row awaiting a verdict', () => {
     expect(activeTabTasks([view({ id: 'awaiting', settled: false, status: 'completed' })]).map(t => t.id)).toEqual(['awaiting'])
   })
 
-  it('archiveTabTasks takes offline, aged, and non-completed terminal rows', () => {
+  it('activeTabTasks keeps a manually archived row out of the active tab', () => {
+    expect(activeTabTasks([view({ id: 'arch', archived: true })]).map(t => t.id)).toEqual([])
+  })
+
+  it('archiveTabTasks takes only manually archived rows', () => {
     const tasks = [
       view({ id: 'w', settled: false, status: 'working' }),
       view({ id: 'fresh', settled: true, status: 'completed', outcome: 'success', updatedMs: 1000 }),
@@ -475,32 +480,34 @@ describe('archive rules', () => {
       view({ id: 'offline', settled: false, status: 'submitted', executorLive: false }),
       view({ id: 'host', settled: true, status: 'completed', outcome: 'success', archived: true }),
     ]
-    expect(archiveTabTasks(tasks).map(t => t.id).sort()).toEqual(['canceled', 'failed', 'host', 'offline', 'old'])
+    expect(archiveTabTasks(tasks).map(t => t.id).sort()).toEqual(['host'])
   })
 
-  it('partitions every live-executor row into exactly one tab', () => {
+  it('partitions every row into exactly one tab', () => {
     const tasks = [
       view({ id: 'a', settled: false, status: 'working' }),
       view({ id: 'b', settled: true, status: 'completed', outcome: 'success', updatedMs: 1000 }),
       view({ id: 'c', settled: true, status: 'completed', outcome: 'success', updatedMs: ARCHIVE_AGE_MS }),
       view({ id: 'd', settled: true, status: 'failed' }),
+      view({ id: 'e', archived: true }),
     ]
     const active = activeTabTasks(tasks).map(t => t.id)
     const archive = archiveTabTasks(tasks).map(t => t.id)
-    expect(active).toEqual(['a', 'b'])
-    expect(archive).toEqual(['c', 'd'])
+    expect(active).toEqual(['a', 'b', 'c', 'd'])
+    expect(archive).toEqual(['e'])
   })
 
-  it('isDagArchived archives terminal failures and cancellations immediately', () => {
-    expect(isDagArchived(view({ status: 'failed', settled: true, updatedMs: 0 }))).toBe(true)
-    expect(isDagArchived(view({ status: 'canceled', settled: true, updatedMs: 0 }))).toBe(true)
-    expect(isDagArchived(view({ status: 'rejected', settled: true, updatedMs: 0 }))).toBe(true)
+  it('isDagArchived archives only manually archived nodes', () => {
+    expect(isDagArchived(view({ archived: true, status: 'working' }))).toBe(true)
+    expect(isDagArchived(view({ status: 'failed', settled: true, updatedMs: 0 }))).toBe(false)
+    expect(isDagArchived(view({ status: 'canceled', settled: true, updatedMs: 0 }))).toBe(false)
+    expect(isDagArchived(view({ status: 'rejected', settled: true, updatedMs: 0 }))).toBe(false)
   })
 
-  it('isDagArchived keeps a settled success for the 24h archive phase', () => {
+  it('isDagArchived keeps a settled success unarchived (no 24h archive phase)', () => {
     const done = view({ status: 'completed', outcome: 'success', settled: true, updatedMs: ARCHIVE_AGE_MS - 1 })
     expect(isDagArchived(done)).toBe(false)
-    expect(isDagArchived({ ...done, updatedMs: ARCHIVE_AGE_MS })).toBe(true)
+    expect(isDagArchived({ ...done, updatedMs: ARCHIVE_AGE_MS })).toBe(false)
   })
 
   it('isDagArchived keeps active work and unsettled completions unarchived', () => {
@@ -510,7 +517,8 @@ describe('archive rules', () => {
   })
 
   it('isDagFaded mirrors isDagArchived', () => {
-    expect(isDagFaded(view({ status: 'failed' }))).toBe(true)
+    expect(isDagFaded(view({ archived: true }))).toBe(true)
+    expect(isDagFaded(view({ status: 'failed' }))).toBe(false)
     expect(isDagFaded(view({ status: 'working' }))).toBe(false)
   })
 
@@ -793,17 +801,16 @@ describe('tasksOfFlow', () => {
 })
 
 describe('visibleDagTasks', () => {
-  it('keeps active tasks plus their archived ancestors', () => {
-    const root = view({ id: 'root', status: 'failed', settled: true })
+  it('keeps active tasks plus their manually-archived ancestors', () => {
+    const root = view({ id: 'root', status: 'completed', outcome: 'success', settled: true, archived: true })
     const mid = view({ id: 'mid', status: 'working', dependencies: ['root'] })
     const leaf = view({ id: 'leaf', status: 'queued', dependencies: ['mid'] })
-    const orphan = view({ id: 'orphan', status: 'completed', outcome: 'success', settled: true, updatedMs: ARCHIVE_AGE_MS })
     const active = view({ id: 'active', status: 'working' })
-    expect(visibleDagTasks([root, mid, leaf, orphan, active]).map(t => t.id).sort()).toEqual(['active', 'leaf', 'mid', 'root'])
+    expect(visibleDagTasks([root, mid, leaf, active]).map(t => t.id).sort()).toEqual(['active', 'leaf', 'mid', 'root'])
   })
 
   it('drops isolated archived tasks from the graph', () => {
-    expect(visibleDagTasks([view({ id: 'gone', status: 'failed', settled: true })])).toEqual([])
+    expect(visibleDagTasks([view({ id: 'gone', archived: true })])).toEqual([])
   })
 
   it('keeps every active node', () => {

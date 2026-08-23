@@ -314,7 +314,7 @@ export class TaskLedger {
       if (row.title === undefined || row.title === '') {
         const migrated: StoredTaskRecord = {
           ...row,
-          title: row.content.trim().slice(0, 80) || 'untitled',
+          title: row.content.trim().slice(0, 20) || 'untitled',
           dependencies: row.dependencies !== undefined ? [...row.dependencies] : undefined,
           handoffs: row.handoffs !== undefined ? [...row.handoffs] : undefined,
           pendingQuestions: row.pendingQuestions !== undefined ? [...row.pendingQuestions] : undefined,
@@ -414,14 +414,16 @@ export class TaskLedger {
   async record(task: NewTask, maxPending: number): Promise<LedgerResult> {
     return this.enqueue(async () => {
       // Title is a required display field (v1.6): every new task carries one.
+      // Naming is uniformly capped at 20 characters (v1.7 product feedback):
+      // flows and task nodes share the same concise-name ceiling.
       const title = task.title.trim()
       if (title.length === 0) {
-        return { ok: false as const, message: 'task title is required (1–80 characters)' }
+        return { ok: false as const, message: 'task title is required (1–20 characters)' }
       }
-      if (title.length > 80) {
+      if (title.length > 20) {
         return {
           ok: false as const,
-          message: `task title is ${title.length} characters, over the 80 limit`,
+          message: `task title is ${title.length} characters, over the 20 limit`,
         }
       }
       const all = this.listAll()
@@ -774,6 +776,29 @@ export class TaskLedger {
   }
 
   /**
+   * Mark one flow archived or active (manual, never automatic). The flow's
+   * archive status is independent of its tasks; only a user action toggles it.
+   *
+   * @param flowId - the flow to toggle.
+   * @param archived - `true` moves it to the archived listing, `false` restores it.
+   * @returns the updated flow, or a refusal.
+   */
+  async archiveFlow(flowId: string, archived: boolean): Promise<FlowResult> {
+    return this.enqueue(async () => {
+      const current = this.flows.get(flowId)
+      if (current === undefined) {
+        return { ok: false as const, message: `no such flow "${flowId}"` }
+      }
+      const updated: StoredFlowRecord = {
+        ...current,
+        archived,
+      }
+      await this.flows.put(flowId, updated)
+      return { ok: true as const, flow: updated }
+    })
+  }
+
+  /**
    * Queue one undelivered note (v1.5): the recipient was offline, so the
    * message is held durably and the delivery sweep retries it once the
    * recipient is live.
@@ -977,6 +1002,32 @@ export class TaskLedger {
       }
       await this.table.put(id, updated)
       this.emitChange(id, 'completed', 'settled-failure')
+      return { ok: true as const, task: updated }
+    })
+  }
+
+  /**
+   * Mark one task archived or active (manual, never automatic). Archiving is
+   * a visibility choice, orthogonal to the lifecycle machine: a queued or
+   * working task may be archived, and the change is reversible.
+   *
+   * @param id - the row to toggle.
+   * @param archived - `true` hides it from the active set, `false` restores it.
+   * @returns the updated row, or a refusal.
+   */
+  async archiveTask(id: TaskId, archived: boolean): Promise<LedgerResult> {
+    return this.enqueue(async () => {
+      const current = this.table.get(id)
+      if (current === undefined) {
+        return { ok: false as const, message: `no such task "${id}"` }
+      }
+      const updated: StoredTaskRecord = {
+        ...current,
+        archived,
+        updatedAt: new Date().toISOString(),
+      }
+      await this.table.put(id, updated)
+      this.emitChange(id, current.status, archived ? 'archived' : 'unarchived')
       return { ok: true as const, task: updated }
     })
   }

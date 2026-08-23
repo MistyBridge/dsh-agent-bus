@@ -1,16 +1,16 @@
 # dsh-agent-bus 使用说明书
 
-dsh-agent-bus 让同一工作区的 agent 会话互相派活、验收、取消,并用流程(DAG)编排多步工作。本文档面向 agent 与人类使用,给出 19 个工具的使用说明、状态机、鉴权边界与渐进式披露用法。
+dsh-agent-bus 让同一工作区的 agent 会话互相派活、验收、取消,并用流程(DAG)编排多步工作。本文档面向 agent 与人类使用,给出 21 个工具的使用说明、状态机、鉴权边界与渐进式披露用法。
 
 ## 一、渐进式披露:先看总览,按需看 full manual
 
 系统提示只注入**简短总览**(`USAGE_OVERVIEW`),包含三条路由(Route by scope)、消息 header 约定,以及「用 `tool_help({ tool })` 获取任一工具完整说明书」的指引。
 
-- **常驻**:`Route by scope`(SMALL→`send_note`、MEDIUM→`create_task`、LARGE→`create_flow`)+ 消息 header(`<dsh-agent-bus task=… tool=…>` 是任务 / `<dsh-agent-bus-message tool="send_note">` 是聊天)+ 19 个工具名清单。
+- **常驻**:`Route by scope`(SMALL→`send_note`、MEDIUM→`create_task`、LARGE→`create_flow`)+ 消息 header(`<dsh-agent-bus task=… tool=…>` 是任务 / `<dsh-agent-bus-message tool="send_note">` 是聊天)+ 21 个工具名清单。
 - **按需**:执行某工具前,若需确认其完整参数 / 语义 / 鉴权,调用 `tool_help({ tool })`,工具结果为该工具的完整说明书(模型可见的披露路径)。
 - 好处:避免一次性把 8.6KB 长文塞进每个请求;模型只在动手前按需展开,上下文负担小、不相关工具不干扰。
 
-## 二、19 个工具
+## 二、21 个工具
 
 > 每个工具的**完整说明书**(参数枚举、语义、鉴权边界、典型用法、注意事项)在运行时经 `tool_help({ tool })` 返回;下表为速查。
 
@@ -48,9 +48,16 @@ dsh-agent-bus 让同一工作区的 agent 会话互相派活、验收、取消,�
 | 工具 | 用途 | 参数 |
 |---|---|---|
 | `create_flow` | 建流程(LARGE 容器:先计划再分解;**流程名 ≤20 字,简明概括任务组核心内容**) | name(≤20), description? |
-| `rename_flow` | 重命名自己创建的流程(**新名 ≤20 字**,可选替换 description) | flow_id, name(≤20), description? |
+| `rename_flow` | 重命名一个流程(**新名 ≤20 字**;工作区成员即可改,不限创建者,可选替换 description) | flow_id, name(≤20), description? |
 | `edit_task` | 编辑未派发任务(要求/依赖/验收/标题/移 flow) | task_id, content?, dependencies?, acceptance_criteria?, title?, flow_id? |
 | `submit_handoff` | 执行方向下游任务提交交接文档 | task_id, to_task_id, document |
+
+### 归档(手动,永不自动)
+
+| 工具 | 用途 | 参数 |
+|---|---|---|
+| `archive_task` | 手动归档/取消归档一个任务(隐藏/恢复其活跃视图,可逆,不改变状态) | task_id, archived? |
+| `archive_flow` | 手动归档/取消归档一个流程(独立于其任务;工作区成员即可操作,不限创建者) | flow_id, archived? |
 
 ### 扩编
 
@@ -78,7 +85,7 @@ queued    → submitted(依赖结算后自动派发)
 
 - `submitted` 是投递后待执行;worker 可 `claim_task` 直接领回 `working`,或经认领自动转。
 - `completed` 待验收;`settle_task(success)` 使其终态并释放 DAG 依赖者。
-- `failed / canceled / rejected` 终态,立即离开活跃列表。
+- `failed / canceled / rejected` 终态;它们**不会自动离开活跃列表**——归档是手动动作(`archive_task`),永不自动;取消归档即恢复可见。
 
 ## 四、鉴权边界(拒绝即给可读理由)
 
@@ -107,7 +114,8 @@ queued    → submitted(依赖结算后自动派发)
 ### 命名规范(决策 8)
 
 - 流程名 `create_flow` / `rename_flow` **≤20 字**,并简明概括任务组核心内容;超过 20 字拒绝,报错「流程名不超过 20 字,并简明概括任务组核心内容」。同工作区重名拒绝(报错列出已有名);无意义名(纯数字/符号)放行但返回命名建议。
-- 任务 `title` 限 1–80 字(与流程名阈值不同)。
+- 任务 `title` **≤20 字**(与流程名阈值一致,统一"所有 name ≤20 字")。
+- 会话标题(会名)`create_member` 的 `name` **≤20 字**。
 
 ## 六、配置与限流
 

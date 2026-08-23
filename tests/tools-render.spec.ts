@@ -142,10 +142,17 @@ describe('renderTaskRow badges and lines', () => {
 })
 
 describe('isActiveTask visibility rule', () => {
-  it('failed, canceled, and rejected rows leave the active set immediately', () => {
-    for (const status of ['failed', 'canceled', 'rejected'] as const) {
-      const task = makeTask({ status, updatedAt: '2026-08-01T00:00:00.000Z' })
-      expect(isActiveTask(task, Date.parse('2026-08-01T00:00:01.000Z')), status).toBe(false)
+  it('no status leaves the active set automatically (manual archive only)', () => {
+    for (const status of [
+      'queued', 'submitted', 'working', 'input-required', 'auth-required',
+      'completed', 'failed', 'canceled', 'rejected',
+    ] as const) {
+      const task = makeTask({
+        status,
+        ...(status === 'completed' ? { outcome: 'success' } : {}),
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      })
+      expect(isActiveTask(task, Date.parse('2026-08-01T00:00:01.000Z')), status).toBe(true)
     }
   })
 
@@ -154,25 +161,22 @@ describe('isActiveTask visibility rule', () => {
     expect(isActiveTask(task, Date.parse('2026-08-01T00:00:00.000Z'))).toBe(true)
   })
 
-  it('a settled row stays active inside the 24h archive age', () => {
-    const updated = Date.parse('2026-08-01T00:00:00.000Z')
-    const task = makeTask({ status: 'completed', outcome: 'success', updatedAt: new Date(updated).toISOString() })
-    expect(isActiveTask(task, updated + 1000)).toBe(true)
-    expect(isActiveTask(task, updated + 24 * 60 * 60 * 1000 - 1)).toBe(true)
+  it('a settled row stays active however old — there is no automatic archive age', () => {
+    const task = makeTask({ status: 'completed', outcome: 'success', updatedAt: '2000-01-01T00:00:00.000Z' })
+    const now = Date.parse('2026-08-01T00:00:00.000Z')
+    expect(isActiveTask(task, now)).toBe(true)
+    expect(isActiveTask(task, now + 24 * 60 * 60 * 1000)).toBe(true)
+    expect(isActiveTask(task, now + 365 * 24 * 60 * 60 * 1000)).toBe(true)
   })
 
-  it('a settled row leaves the active set at exactly 24h (archive boundary)', () => {
-    const updated = Date.parse('2026-08-01T00:00:00.000Z')
-    const task = makeTask({ status: 'completed', outcome: 'success', updatedAt: new Date(updated).toISOString() })
-    expect(isActiveTask(task, updated + 24 * 60 * 60 * 1000)).toBe(false)
-    expect(isActiveTask(task, updated + 24 * 60 * 60 * 1000 + 1)).toBe(false)
-  })
-
-  it('queued, submitted, working, input-required, and auth-required stay active', () => {
-    for (const status of ['queued', 'submitted', 'working', 'input-required', 'auth-required'] as const) {
-      const task = makeTask({ status, updatedAt: '2026-08-01T00:00:00.000Z' })
-      expect(isActiveTask(task, Date.parse('2026-08-01T00:00:01.000Z')), status).toBe(true)
-    }
+  it('a manually archived row leaves the active set, and unarchiving restores it', () => {
+    const archived = makeTask({
+      status: 'completed', outcome: 'success', archived: true,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    })
+    expect(isActiveTask(archived, Date.parse('2026-08-01T00:00:01.000Z'))).toBe(false)
+    const restored = makeTask({ ...archived, archived: false })
+    expect(isActiveTask(restored, Date.parse('2026-08-01T00:00:01.000Z'))).toBe(true)
   })
 })
 
@@ -227,7 +231,7 @@ describe('list_tasks visibility through the real tool', () => {
     expect(inbox[0]!.report).toBe('the result')
   })
 
-  it('a failed row is invisible in both scopes', async () => {
+  it('a failed row stays visible in both scopes (no automatic archive)', async () => {
     const harness = await newHarness()
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_B))
@@ -237,12 +241,12 @@ describe('list_tasks visibility through the real tool', () => {
     await harness.ledger.transition(TaskId('fl-1'), 'failed', { reason: 'timeout' })
 
     const inbox = await harness.run('list_tasks', { scope: 'inbox' }, SESSION_B)
-    expect(idsOf(inbox)).toEqual(['ok-1'])
+    expect(idsOf(inbox)).toEqual(['ok-1', 'fl-1'])
     const outbox = await harness.run('list_tasks', { scope: 'outbox' }, SESSION_A)
-    expect(idsOf(outbox)).toEqual(['ok-1'])
+    expect(idsOf(outbox)).toEqual(['ok-1', 'fl-1'])
   })
 
-  it('settled rows leave the listing once the 24h archive age passes; fresh settled rows stay', async () => {
+  it('a settled row stays listed until it is manually archived, and unarchiving restores it', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       vi.setSystemTime(new Date('2026-08-01T00:00:00.000Z'))
@@ -250,31 +254,25 @@ describe('list_tasks visibility through the real tool', () => {
       harness.agents.add(makeAgent(SESSION_A))
       harness.agents.add(makeAgent(SESSION_B))
 
-      // 旧任务：T0 完成并验收。
       await harness.ledger.record(makeNewTask({ id: TaskId('old-1') }), 8)
       await harness.ledger.transition(TaskId('old-1'), 'working')
       await harness.ledger.transition(TaskId('old-1'), 'completed', { report: 'old result' })
       await harness.ledger.settle(TaskId('old-1'), 'success', undefined)
 
-      // 新任务：T0+2h 完成并验收。
-      vi.setSystemTime(new Date('2026-08-01T02:00:00.000Z'))
-      await harness.ledger.record(makeNewTask({ id: TaskId('fresh-1') }), 8)
-      await harness.ledger.transition(TaskId('fresh-1'), 'working')
-      await harness.ledger.transition(TaskId('fresh-1'), 'completed', { report: 'fresh result' })
-      await harness.ledger.settle(TaskId('fresh-1'), 'success', undefined)
-
-      vi.setSystemTime(new Date('2026-08-01T03:00:00.000Z'))
-      const both = await harness.run('list_tasks', { scope: 'inbox' }, SESSION_B)
-      expect(idsOf(both)).toEqual(['old-1', 'fresh-1'])
-
-      // 越过 24h：旧任务（25h 龄）归档不可见，新任务（23h 龄）仍在。
-      vi.setSystemTime(new Date('2026-08-02T01:00:00.001Z'))
+      // 越过 24h:仍在(无自动归档)。
+      vi.setSystemTime(new Date('2026-08-02T02:00:00.000Z'))
       const after = await harness.run('list_tasks', { scope: 'inbox' }, SESSION_B)
-      expect(idsOf(after)).toEqual(['fresh-1'])
+      expect(idsOf(after)).toEqual(['old-1'])
 
-      // 恰好 24h 的边界：归档年龄是严格小于，等于即不可见。
-      vi.setSystemTime(new Date('2026-08-02T00:00:00.000Z'))
-      expect(isActiveTask(harness.ledger.get(TaskId('old-1'))!, Date.now())).toBe(false)
+      // archive_task 手动归档后不可见。
+      await harness.run('archive_task', { task_id: 'old-1', archived: true }, SESSION_A)
+      const archived = await harness.run('list_tasks', { scope: 'inbox' }, SESSION_B)
+      expect(idsOf(archived)).toEqual([])
+
+      // 取消归档恢复。
+      await harness.run('archive_task', { task_id: 'old-1', archived: false }, SESSION_A)
+      const restored = await harness.run('list_tasks', { scope: 'inbox' }, SESSION_B)
+      expect(idsOf(restored)).toEqual(['old-1'])
     } finally {
       vi.useRealTimers()
     }

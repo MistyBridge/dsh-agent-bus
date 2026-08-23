@@ -72,8 +72,9 @@ export const taskRecord = z.object({
   assignedReviewer: sessionId.optional(),
   workspacePath: z.string(),
   content: z.string(),
-  /** Short display title (v1.6); list/DAG nodes prefer it over content. */
-  title: z.string().max(80).optional(),
+  /** Short display title (v1.6); list/DAG nodes prefer it over content.
+   * Naming is uniformly capped at 20 characters (v1.7 product feedback). */
+  title: z.string().max(20).optional(),
   status: z.enum([
     'queued',
     'submitted',
@@ -109,6 +110,8 @@ export const taskRecord = z.object({
     document: z.string(),
     at: z.string(),
   })).optional(),
+  /** Manual archive marker (absent = active): archiving is a user action, never automatic. */
+  archived: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
@@ -131,16 +134,17 @@ export const peerCard = z.object({
 export type StoredPeerCard = z.infer<typeof peerCard>
 
 /**
- * Durable shape of one flow: a named DAG container for tasks (v1.4). A flow
- * has no status of its own — active/archived is derived from its tasks.
+ * Durable shape of one flow: a named DAG container for tasks (v1.4). Archiving
+ * is a user action (absent = active), never derived from task state.
  */
 export const flowRecord = z.object({
   id: z.string(),
-  name: z.string().min(1).max(80),
+  name: z.string().min(1).max(20),
   description: z.string().max(400).optional(),
   createdBy: sessionId,
   workspacePath: z.string(),
   createdAt: z.string(),
+  archived: z.boolean().optional(),
 })
 
 /** One stored flow, inferred from {@link flowRecord}. */

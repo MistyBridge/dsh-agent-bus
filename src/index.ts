@@ -307,6 +307,68 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
       },
     }), 'agent-bus: dispatch route')
+    // Manual archive endpoint (decision 12): the panel's archive/unarchive
+    // buttons POST here. User-driven, never automatic — mirrors the workspace
+    // session-archive UX. Archiving is a reversible visibility toggle.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/plugins/dsh-agent-bus/archive',
+      handler: async (req, res) => {
+        const send = (status: number, body: object): void => {
+          res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify(body))
+        }
+        try {
+          if (req.method !== 'POST') {
+            send(405, { error: 'method-not-allowed' })
+            return
+          }
+          const chunks: Buffer[] = []
+          for await (const chunk of req) chunks.push(chunk as Buffer)
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as
+            { kind?: unknown; id?: unknown; archived?: unknown }
+          if (typeof parsed.kind !== 'string' || typeof parsed.id !== 'string' || parsed.id === '') {
+            send(400, { error: 'kind and id required' })
+            return
+          }
+          const archived = parsed.archived !== false
+          if (parsed.kind === 'task') {
+            const taskId = TaskId(parsed.id)
+            const task = ledger.get(taskId)
+            if (task === undefined) {
+              send(404, { error: 'no such task' })
+              return
+            }
+            const result = await ledger.archiveTask(taskId, archived)
+            if (!result.ok) {
+              send(400, { error: result.message })
+              return
+            }
+            send(200, { taskId: String(taskId), status: result.task.status, archived })
+            return
+          }
+          if (parsed.kind === 'flow') {
+            const flowId = parsed.id
+            const flow = ledger.getFlow(flowId)
+            if (flow === undefined) {
+              send(404, { error: 'no such flow' })
+              return
+            }
+            const result = await ledger.archiveFlow(flowId, archived)
+            if (!result.ok) {
+              send(400, { error: result.message })
+              return
+            }
+            send(200, { flowId, name: result.flow.name, archived })
+            return
+          }
+          send(400, { error: 'kind must be task or flow' })
+        } catch (error: unknown) {
+          ctx.logger.warn(`agent-bus: archive route failed: ${String(error)}`)
+          send(500, { error: 'archive-failed' })
+        }
+      },
+    }), 'agent-bus: archive route')
   }
   registerWebSurface()
   ctx.on('internal/service', (name) => {

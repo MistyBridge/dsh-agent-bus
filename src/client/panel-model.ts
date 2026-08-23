@@ -70,9 +70,9 @@ export interface TaskView {
   readonly turn: number | null
   readonly staff: readonly StaffEntry[]
   readonly taskTokensTotal: TokenBuckets | null
-  /** Whether the executor (assignedTo) is live; the authoritative tab-partition key. */
+  /** Whether the executor (assignedTo) is live; kept for display, not partition. */
   readonly executorLive: boolean
-  /** Host-set when the task has entered the archive phase (completed ≥ 24h). */
+  /** Manual archive marker; absent = active. Set by the user, never by the lifecycle. */
   readonly archived?: boolean
   /** DAG predecessors (task ids), in declaration order; empty when none. */
   readonly dependencies: readonly string[]
@@ -118,9 +118,9 @@ export interface FlowView {
   readonly description: string | null
   readonly workspacePath: string
   readonly taskCount: number
-  /** Tasks still in the active set (not archived). */
+  /** Tasks that have not settled (still awaiting a verdict or in progress). */
   readonly unsettledCount: number
-  /** Derived: every task in the flow has archived. */
+  /** Manual archive marker; absent = active. Set by the user, never derived. */
   readonly archived: boolean
 }
 
@@ -256,6 +256,19 @@ export function sortUnsettled(tasks: readonly TaskView[], _nowMs: number): TaskV
 /** Settled tasks, newest-updated first so the archive reads as history. */
 export function sortSettled(tasks: readonly TaskView[]): TaskView[] {
   return settledTasks(tasks).sort((left, right) => {
+    const updated = right.updatedAt.localeCompare(left.updatedAt)
+    if (updated !== 0) return updated
+    return right.createdAt.localeCompare(left.createdAt)
+  })
+}
+
+/**
+ * Manually archived tasks, most-recently-updated first. Unlike {@link sortSettled}
+ * this does not drop non-settled rows: under manual archive any status may be
+ * archived, and the archive tab shows them all.
+ */
+export function sortArchived(tasks: readonly TaskView[]): TaskView[] {
+  return [...tasks].sort((left, right) => {
     const updated = right.updatedAt.localeCompare(left.updatedAt)
     if (updated !== 0) return updated
     return right.createdAt.localeCompare(left.createdAt)
@@ -504,41 +517,32 @@ export function sessionsOfWorkspace(
 }
 
 /**
- * A completed task stays in the active tab for this long after settlement;
- * the host then marks it archived. The client also applies this locally
- * when the snapshot has not yet set `archived`.
+ * Legacy constant from the (removed) automatic-archive model. Kept so the host
+ * and client reference a single archive-age value and tests assert they agree,
+ * but it no longer drives any archive decision — archiving is a user action.
  */
 export const ARCHIVE_AGE_MS = 24 * 60 * 60 * 1000
 
-/** Host flag, dedicated status, or completed/settled older than 24h. */
+/** Manual archive marker (default false): archiving is a user action, never automatic. */
 export function isArchived(task: TaskView): boolean {
-  if (task.archived === true || task.status === 'archived') return true
-  return task.settled && task.updatedMs >= ARCHIVE_AGE_MS
+  return task.archived === true || task.status === 'archived'
 }
 
 /**
- * Active tab: in-progress (not settled) plus 已完成 that is not yet archived.
- * Failed / canceled rows go to archive; they are not "进行中" or "已完成".
- * An offline executor cannot hold active work, so its rows are
- * archive-bound immediately.
+ * Active tab: everything not manually archived. Archiving is a user action
+ * (archive_task / archive_flow), never derived from status, clock, or executor
+ * liveness, so no task disappears from the active listing on its own.
  */
 export function activeTabTasks(tasks: readonly TaskView[]): TaskView[] {
-  return tasks.filter(task => {
-    if (!task.executorLive) return false
-    if (isArchived(task)) return false
-    if (!task.settled) return true
-    return task.status === 'completed'
-  })
+  return tasks.filter(task => !isArchived(task))
 }
 
 /**
- * Archive tab: everything of offline executors, host-archived rows,
- * completed-over-24h, and other terminals (failed / canceled) that are not
- * shown as active work.
+ * Archive tab: tasks the user manually archived. Nothing moves here
+ * automatically — only an explicit archive action does.
  */
 export function archiveTabTasks(tasks: readonly TaskView[]): TaskView[] {
-  return tasks.filter(task =>
-    !task.executorLive || isArchived(task) || (task.settled && task.status !== 'completed'))
+  return tasks.filter(task => isArchived(task))
 }
 
 /** Active-tab order: in-progress first (oldest update), then 已完成 (newest). */
@@ -856,16 +860,11 @@ export function tasksOfFlow(tasks: readonly TaskView[], flowId: string | null): 
 }
 
 /**
- * The DAG's archive rule (v1.4 §6): a terminal failure/cancel/reject leaves
- * the active set IMMEDIATELY, and a settled success leaves after the 24h
- * archive phase. This mirrors the flow-archived derivation (panel flows
- * directory) and the tools' isActiveTask, so a faded node, the flow list,
- * and the agent-visible set never disagree about what is archived.
+ * The DAG's archive rule: a node is archived when its task is manually
+ * archived (`archive_task` / `archive_flow`). Nothing moves a node out of the
+ * active DAG automatically — no status, clock, or executor-liveness rule.
  */
 export function isDagArchived(task: TaskView): boolean {
-  if (task.status === 'failed' || task.status === 'canceled' || task.status === 'rejected') {
-    return true
-  }
   return isArchived(task)
 }
 

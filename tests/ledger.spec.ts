@@ -706,14 +706,14 @@ describe('queue depth and content limits', () => {
     expectOk(await ledger.record(makeNewTask({ id: TaskId('t2'), messageId: 'm2' }), 1))
   })
 
-  it('refuses empty and over-limit titles instead of truncating; exactly 80 passes', async () => {
+  it('refuses empty and over-limit titles instead of truncating; exactly 20 passes', async () => {
     const ledger = await openLedger()
     expect(messageOf(await ledger.record(makeNewTask({ id: TaskId('e1'), title: '   ' }), 8)))
       .toMatch(/title is required/)
-    expect(messageOf(await ledger.record(makeNewTask({ id: TaskId('e2'), title: 'x'.repeat(81) }), 8)))
-      .toMatch(/over the 80 limit/)
-    const atLimit = expectOk(await ledger.record(makeNewTask({ id: TaskId('e3'), title: 'x'.repeat(80) }), 8))
-    expect(atLimit.title).toBe('x'.repeat(80))
+    expect(messageOf(await ledger.record(makeNewTask({ id: TaskId('e2'), title: 'x'.repeat(21) }), 8)))
+      .toMatch(/over the 20 limit/)
+    const atLimit = expectOk(await ledger.record(makeNewTask({ id: TaskId('e3'), title: 'x'.repeat(20) }), 8))
+    expect(atLimit.title).toBe('x'.repeat(20))
   })
 
   it('admitContent refuses over-limit content at the exact boundary, never truncating', () => {
@@ -755,6 +755,50 @@ describe('flows and peer cards', () => {
       capabilities: [],
       updatedAt: '2026-08-02T00:00:00.000Z',
     })
+  })
+})
+
+describe('manual archive (decision 12)', () => {
+  it('archives and unarchives a task, toggling the persisted marker', async () => {
+    const ledger = await openLedger()
+    const created = expectOk(await ledger.record(makeNewTask({ id: TaskId('ta-1') }), 8))
+    expect(created.archived).toBeUndefined()
+    const archived = expectOk(await ledger.archiveTask(TaskId('ta-1'), true))
+    expect(archived.archived).toBe(true)
+    const unarchived = expectOk(await ledger.archiveTask(TaskId('ta-1'), false))
+    expect(unarchived.archived).toBe(false)
+  })
+
+  it('archiving is reversible and never touches the lifecycle status', async () => {
+    const ledger = await openLedger()
+    await ledger.record(makeNewTask({ id: TaskId('ta-2') }), 8)
+    await ledger.transition(TaskId('ta-2'), 'working')
+    const archived = expectOk(await ledger.archiveTask(TaskId('ta-2'), true))
+    expect(archived.status).toBe('working')
+    expect(archived.archived).toBe(true)
+  })
+
+  it('refuses to archive an unknown task', async () => {
+    const ledger = await openLedger()
+    expect(messageOf(await ledger.archiveTask(TaskId('ghost'), true))).toMatch(/no such task/)
+  })
+
+  it('archives and unarchives a flow, toggling the persisted marker', async () => {
+    const ledger = await openLedger()
+    await ledger.createFlow('fa-1', 'Flow A', undefined, SESSION_A, WORKSPACE)
+    const archived = await ledger.archiveFlow('fa-1', true)
+    if (!archived.ok) throw new Error(archived.message)
+    expect(archived.flow.archived).toBe(true)
+    const unarchived = await ledger.archiveFlow('fa-1', false)
+    if (!unarchived.ok) throw new Error(unarchived.message)
+    expect(unarchived.flow.archived).toBe(false)
+  })
+
+  it('refuses to archive an unknown flow', async () => {
+    const ledger = await openLedger()
+    const result = await ledger.archiveFlow('ghost', true)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/no such flow/)
   })
 })
 

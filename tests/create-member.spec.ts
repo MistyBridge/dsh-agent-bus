@@ -198,6 +198,14 @@ describe('parseCreateMemberInput', () => {
     if (!result.ok) expect(result.error).toContain('"name"')
   })
 
+  it('refuses an over-long name (session title is capped at 20 chars)', () => {
+    const over = parseCreateMemberInput({ workspace: WORKSPACE, name: 'x'.repeat(21) })
+    expect(over.ok).toBe(false)
+    if (!over.ok) expect(over.error).toContain('"name"')
+    const atLimit = parseCreateMemberInput({ workspace: WORKSPACE, name: 'x'.repeat(20) })
+    expect(atLimit.ok).toBe(true)
+  })
+
   it('refuses a non-string role', () => {
     const result = parseCreateMemberInput({ workspace: WORKSPACE, name: 'M', role: 42 })
     expect(result.ok).toBe(false)

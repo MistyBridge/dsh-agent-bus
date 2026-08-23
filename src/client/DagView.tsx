@@ -261,6 +261,7 @@ export interface DagViewProps {
   readonly flows: readonly FlowView[]
   readonly selectedFlowId: string | null
   readonly onSelectFlow: (id: string) => void
+  readonly onArchiveFlow: (id: string, archived: boolean) => void
   readonly sidebarWidth: number
   readonly onSidebarResizeDown: (event: ReactPointerEvent<HTMLDivElement>) => void
   readonly onSidebarResizeMove: (event: ReactPointerEvent<HTMLDivElement>) => void
@@ -279,6 +280,7 @@ export function DagView({
   flows,
   selectedFlowId,
   onSelectFlow,
+  onArchiveFlow,
   sidebarWidth,
   onSidebarResizeDown,
   onSidebarResizeMove,
@@ -611,13 +613,12 @@ export function DagView({
               data-active={selectedFlowId === flow.id || undefined}
               onClick={() => onSelectFlow(flow.id)}
             >
-              <span className="abPFlowText">
-                <span className="abPFlowName">{flow.name}</span>
-                {flow.description !== null && flow.description !== '' && (
-                  <span className="abPFlowDesc" title={flow.description}>{flow.description}</span>
-                )}
+              <span
+                className="abPFlowName"
+                style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {flow.name}
               </span>
-              <span className="abPFlowCount">{flow.unsettledCount}</span>
             </button>
           ))}
         </div>
@@ -634,13 +635,12 @@ export function DagView({
                   data-archived
                   onClick={() => onSelectFlow(flow.id)}
                 >
-                  <span className="abPFlowText">
-                    <span className="abPFlowName">{flow.name}</span>
-                    {flow.description !== null && flow.description !== '' && (
-                      <span className="abPFlowDesc" title={flow.description}>{flow.description}</span>
-                    )}
+                  <span
+                    className="abPFlowName"
+                    style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {flow.name}
                   </span>
-                  <span className="abPFlowCount">{flow.taskCount}</span>
                 </button>
               ))}
             </div>
@@ -648,6 +648,49 @@ export function DagView({
         )}
       </nav>
       <div className="abPDagPane">
+        {selectedFlow !== null && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '10px 12px',
+              borderBottom: '1px solid var(--dsw-alias-border-l2)',
+            }}
+          >
+            <span
+              style={{
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontWeight: 600,
+                color: 'var(--dsw-alias-label-primary)',
+              }}
+            >
+              {selectedFlow.name}
+            </span>
+            <button
+              type="button"
+              style={{
+                flex: 'none',
+                marginLeft: 'auto',
+                height: 28,
+                padding: '0 10px',
+                border: '1px solid var(--dsw-alias-border-l2)',
+                borderRadius: 8,
+                background: 'transparent',
+                color: 'var(--dsw-alias-label-secondary)',
+                fontSize: 12,
+                lineHeight: 1,
+                cursor: 'pointer',
+              }}
+              onClick={() => onArchiveFlow(selectedFlow.id, selectedFlow.archived !== true)}
+            >
+              {selectedFlow.archived === true ? '取消归档' : '归档'}
+            </button>
+          </div>
+        )}
         {selectedFlow === null ? (
           <div className="abPEmpty">
             <div className="abPEmptyTitle">选择一个流程</div>

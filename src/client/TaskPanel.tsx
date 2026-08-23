@@ -34,7 +34,7 @@ import {
   relativeTime,
   sessionsOfWorkspace,
   sortActive,
-  sortSettled,
+  sortArchived,
   statusLabel,
   statusTone,
   tasksOfSession,
@@ -51,6 +51,7 @@ import { DagView } from './DagView.tsx'
 const STATE_PATH = '/plugins/dsh-agent-bus/state'
 const EVENTS_PATH = '/plugins/dsh-agent-bus/events'
 const DISPATCH_PATH = '/plugins/dsh-agent-bus/dispatch'
+const ARCHIVE_PATH = '/plugins/dsh-agent-bus/archive'
 const FLOW_KEY = 'dsh-agent-bus.dag.flow'
 const STORAGE_KEY = 'dsh-agent-bus.workspace'
 const SIDEBAR_KEY = 'dsh-agent-bus.sidebar-width'
@@ -353,11 +354,12 @@ function dispatchReady(tasks: readonly TaskView[], changedId: string | null): vo
   }
 }
 
-function usePanelSnapshot(): { snapshot: PanelSnapshot; loading: boolean } {
+function usePanelSnapshot(): { snapshot: PanelSnapshot; loading: boolean; refresh: () => void } {
   const [snapshot, setSnapshot] = useState<PanelSnapshot>(emptySnapshot)
   const [loading, setLoading] = useState(true)
   const snapshotRef = useRef(snapshot)
   snapshotRef.current = snapshot
+  const pullRef = useRef<(changedId: string | null) => Promise<void>>(async () => {})
 
   useEffect(() => {
     let cancelled = false
@@ -378,6 +380,7 @@ function usePanelSnapshot(): { snapshot: PanelSnapshot; loading: boolean } {
         if (!cancelled) setLoading(false)
       }
     }
+    pullRef.current = pull
 
     const startPoll = (): void => {
       if (pollTimer !== null) return
@@ -419,7 +422,7 @@ function usePanelSnapshot(): { snapshot: PanelSnapshot; loading: boolean } {
     }
   }, [])
 
-  return { snapshot, loading }
+  return { snapshot, loading, refresh: () => { void pullRef.current(null) } }
 }
 
 function StatusDot({ task, className }: { task: TaskView; className: string }): JSX.Element {
@@ -495,12 +498,14 @@ function TaskFloat({
   anchor,
   onReady,
   onClose,
+  onArchive,
 }: {
   task: TaskView
   nowMs: number
   anchor: DOMRect
   onReady: (el: HTMLElement | null) => void
   onClose: () => void
+  onArchive: (archived: boolean) => void
 }): JSX.Element {
   const zone = reportZoneLabel(task.reportZone)
   const box = placeFloat(anchor)
@@ -522,6 +527,14 @@ function TaskFloat({
               {task.retries > 0 ? ` · 重做 ${task.retries}` : ''}
             </div>
           </div>
+          <button
+            type="button"
+            className="abPArchive"
+            aria-label={task.archived === true ? '取消归档任务' : '归档任务'}
+            onClick={() => onArchive(task.archived !== true)}
+          >
+            {task.archived === true ? '取消归档' : '归档'}
+          </button>
           <button type="button" className={css.abPClose} aria-label="关闭任务详情" onClick={onClose}>
             <IconCloseOutline16 size={16} />
           </button>
@@ -656,7 +669,18 @@ const css = {
  */
 export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
   useLayoutEffect(() => { ensurePanelStyles() }, [])
-  const { snapshot, loading } = usePanelSnapshot()
+  const { snapshot, loading, refresh } = usePanelSnapshot()
+  const archiveToggle = async (kind: 'task' | 'flow', id: string, archived: boolean): Promise<void> => {
+    try {
+      await fetch(ARCHIVE_PATH, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, id, archived }),
+      })
+    } finally {
+      refresh()
+    }
+  }
   const currentSessionId = useCurrentSessionId(sessionsList)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const taskNote = useNoteWindow(TASK_NOTE_KEY, defaultTaskNoteGeom)
@@ -743,7 +767,7 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
 
   const visibleTasks = useMemo(() => {
     const scoped = tasksOfSession(workspaceTasks, sessionFilter)
-    if (archiveMode) return sortSettled(archiveTabTasks(scoped))
+    if (archiveMode) return sortArchived(archiveTabTasks(scoped))
     return sortActive(activeTabTasks(scoped))
   }, [workspaceTasks, sessionFilter, archiveMode, nowMs])
 
@@ -1363,6 +1387,7 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
                     /* private mode */
                   }
                 }}
+                onArchiveFlow={(id, archived) => { void archiveToggle('flow', id, archived) }}
                 sidebarWidth={sidebarWidth}
                 onSidebarResizeDown={onSidebarResizeDown}
                 onSidebarResizeMove={onSidebarResizeMove}
@@ -1389,6 +1414,7 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
           anchor={floatAnchor}
           onReady={el => { floatRef.current = el }}
           onClose={() => { setFocusedTaskId(null); setFloatAnchor(null) }}
+          onArchive={archived => { void archiveToggle('task', focusedTask.id, archived) }}
         />
       )}
     </div>

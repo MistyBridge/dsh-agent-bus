@@ -103,13 +103,9 @@ export interface TaskView {
   readonly turn: number | null
   readonly staff: readonly StaffEntry[]
   readonly taskTokensTotal: TokenBuckets | null
-  /** Whether the executor (assignedTo) is live; the authoritative tab-partition key. */
+  /** Whether the executor (assignedTo) is live; kept for display, not partition. */
   readonly executorLive: boolean
-  /**
-   * Whether the task reached the lifecycle's archive phase: settled and
-   * settled more than {@link ARCHIVE_AGE_MS} ago. Host-derived so the panel
-   * never computes the age client-side.
-   */
+  /** Manual archive marker; absent = active. Set by the user, never by the lifecycle. */
   readonly archived: boolean
   /** DAG predecessors (task ids), in declaration order; empty when none. */
   readonly dependencies: readonly string[]
@@ -130,8 +126,9 @@ export interface TaskView {
 }
 
 /**
- * How long a settled task stays in the active tab before the lifecycle's
- * archive phase takes it over (24 hours).
+ * Legacy constant from the (removed) automatic-archive model. Kept so host and
+ * client reference one archive-age value and tests assert they agree; it no
+ * longer drives any archive decision.
  */
 export const ARCHIVE_AGE_MS = 24 * 60 * 60 * 1000
 
@@ -154,9 +151,9 @@ export interface FlowView {
   readonly description: string | null
   readonly workspacePath: string
   readonly taskCount: number
-  /** Tasks still in the active set (not archived). */
+  /** Tasks that have not settled (still awaiting a verdict or in progress). */
   readonly unsettledCount: number
-  /** Derived: every task in the flow has archived. */
+  /** Manual archive marker; absent = active. Set by the user, never derived. */
   readonly archived: boolean
 }
 
@@ -429,7 +426,7 @@ export async function buildTaskView(
     staff,
     taskTokensTotal: sumTokens(staff.map(entry => entry.tokensInTask)),
     executorLive: task.assignedTo !== undefined && agents?.get(task.assignedTo) !== undefined,
-    archived: isSettled(task) && now - Date.parse(task.updatedAt) >= ARCHIVE_AGE_MS,
+    archived: task.archived === true,
     dependents: [],
     blockedBy: [],
     auto: task.auto === true,
@@ -584,11 +581,12 @@ export async function buildPanelSnapshot(
     }
   }
 
-  // Flow directory: derived active/archived per flow. The DAG view selects a
-  // flow and renders only its tasks; flow-less tasks never appear there.
+  // Flow directory: manual archive per flow. The DAG view selects a flow and
+  // renders only its tasks; a flow's archive status is a user action, never
+  // derived from task state.
   const flows: FlowView[] = ledger.listFlows().map(flow => {
     const tasks = allRows.filter(row => row.flowId === flow.id)
-    const unsettled = tasks.filter(row => isActiveRow(row, now))
+    const unsettled = tasks.filter(row => !isSettled(row))
     return {
       id: flow.id,
       name: flow.name,
@@ -596,7 +594,7 @@ export async function buildPanelSnapshot(
       workspacePath: flow.workspacePath,
       taskCount: tasks.length,
       unsettledCount: unsettled.length,
-      archived: tasks.length > 0 && unsettled.length === 0,
+      archived: flow.archived === true,
     }
   })
 
@@ -615,16 +613,4 @@ export async function buildPanelSnapshot(
     recoveredWorkers: recovery.recoveredWorkers,
     recoveryAt: recovery.recoveryAt,
   }
-}
-
-/** Whether one row is still in the active set (archive-rule mirror). */
-function isActiveRow(row: TaskRecord, now: number): boolean {
-  if (row.status === 'failed' || row.status === 'canceled' || row.status === 'rejected') {
-    return false
-  }
-  if (row.status === 'completed') {
-    if (row.outcome === undefined) return true
-    return now - Date.parse(row.updatedAt) < ARCHIVE_AGE_MS
-  }
-  return true
 }

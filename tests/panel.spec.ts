@@ -384,14 +384,17 @@ describe('buildTaskView', () => {
     expect(canceled.settled).toBe(true)
   })
 
-  it('archives a settled row at exactly the 24h age and keeps it one ms under', async () => {
-    const settledAt = '2026-08-01T00:00:00.000Z'
-    const row = task({ status: 'completed', outcome: 'success', updatedAt: settledAt })
-    const base = Date.parse(settledAt)
-    const exact = await buildTaskView(row, new Map(), undefined, undefined, makeReports(), base + ARCHIVE_AGE_MS)
-    const under = await buildTaskView(row, new Map(), undefined, undefined, makeReports(), base + ARCHIVE_AGE_MS - 1)
-    expect(exact.archived).toBe(true)
-    expect(under.archived).toBe(false)
+  it('marks archived only for a manually archived row, never by age', async () => {
+    const active = await buildTaskView(
+      task({ status: 'completed', outcome: 'success', updatedAt: '2020-01-01T00:00:00.000Z' }),
+      new Map(), undefined, undefined, makeReports(), FIXED_NOW,
+    )
+    const archived = await buildTaskView(
+      task({ status: 'completed', outcome: 'success', archived: true, updatedAt: '2020-01-01T00:00:00.000Z' }),
+      new Map(), undefined, undefined, makeReports(), FIXED_NOW,
+    )
+    expect(active.archived).toBe(false)
+    expect(archived.archived).toBe(true)
   })
 
   it('never archives unsettled rows, and archives a fresh terminal only after the age', async () => {
@@ -624,7 +627,7 @@ describe('buildPanelSnapshot', () => {
     }
   })
 
-  it('derives flow archived: any active task keeps the flow active', async () => {
+  it('derives flow archived from the manual archive flag, not task state', async () => {
     const { harness, ledger, ctx } = await openLedgerWithCtx()
     try {
       wireCtx(ctx)
@@ -634,6 +637,8 @@ describe('buildPanelSnapshot', () => {
       await ledger.record(makeNewTask({ id: TaskId('f1'), title: 'F1', flowId: 'flow-active' }), 8)
       await ledger.record(makeNewTask({ id: TaskId('f2'), title: 'F2', flowId: 'flow-archived' }), 8)
       await ledger.transition(TaskId('f2'), 'failed')
+      const archivedRes = await ledger.archiveFlow('flow-archived', true)
+      if (!archivedRes.ok) throw new Error(archivedRes.message)
       const snapshot = await buildPanelSnapshot(ctx, ledger, makeReports(), Date.now())
       const byId = new Map(snapshot.flows.map(flow => [flow.id, flow]))
       expect(byId.get('flow-active')).toMatchObject({
@@ -647,7 +652,7 @@ describe('buildPanelSnapshot', () => {
     }
   })
 
-  it('archives a settled flow only after the 24h archive phase', async () => {
+  it('archives a settled flow only when manually archived (no 24h archive phase)', async () => {
     const { harness, ledger, ctx } = await openLedgerWithCtx()
     try {
       wireCtx(ctx)
@@ -659,15 +664,21 @@ describe('buildPanelSnapshot', () => {
       if (!settled.ok) throw new Error(settled.message)
       const updatedAt = Date.parse(settled.task.updatedAt)
       const under = await buildPanelSnapshot(ctx, ledger, makeReports(), updatedAt + ARCHIVE_AGE_MS - 1)
-      expect(under.flows.find(flow => flow.id === 'flow-settled')).toMatchObject({ archived: false, unsettledCount: 1 })
-      const exact = await buildPanelSnapshot(ctx, ledger, makeReports(), updatedAt + ARCHIVE_AGE_MS)
-      expect(exact.flows.find(flow => flow.id === 'flow-settled')).toMatchObject({ archived: true, unsettledCount: 0 })
+      expect(under.flows.find(flow => flow.id === 'flow-settled')).toMatchObject({ archived: false, unsettledCount: 0 })
+      // 越过 24h 仍不自动归档。
+      const aged = await buildPanelSnapshot(ctx, ledger, makeReports(), updatedAt + ARCHIVE_AGE_MS + 1000)
+      expect(aged.flows.find(flow => flow.id === 'flow-settled')).toMatchObject({ archived: false, unsettledCount: 0 })
+      // 手动归档后进入归档段。
+      const archivedRes = await ledger.archiveFlow('flow-settled', true)
+      if (!archivedRes.ok) throw new Error(archivedRes.message)
+      const archived = await buildPanelSnapshot(ctx, ledger, makeReports(), Date.now())
+      expect(archived.flows.find(flow => flow.id === 'flow-settled')).toMatchObject({ archived: true, unsettledCount: 0 })
     } finally {
       await harness.dispose()
     }
   })
 
-  it('keeps the flow archive derivation consistent with the client DAG rule', async () => {
+  it('keeps host and client archive rules consistent (manual archive only)', async () => {
     const { harness, ledger, ctx } = await openLedgerWithCtx()
     try {
       wireCtx(ctx)
@@ -679,25 +690,20 @@ describe('buildPanelSnapshot', () => {
       if (!settled.ok) throw new Error(settled.message)
       const updatedAt = Date.parse(settled.task.updatedAt)
 
+      // 已结算但未手动归档 → 保持活跃;宿主与客户端一致。
       const fresh = await buildPanelSnapshot(ctx, ledger, makeReports(), updatedAt)
       const freshFlow = fresh.flows.find(flow => flow.id === 'flow-x')!
       const freshTask = fresh.tasks.find(t => t.id === 'x1')!
       expect(freshFlow.archived).toBe(false)
+      expect(freshTask.archived).toBe(false)
       expect(isDagArchived(freshTask)).toBe(false)
 
-      const aged = await buildPanelSnapshot(ctx, ledger, makeReports(), updatedAt + ARCHIVE_AGE_MS)
-      const agedFlow = aged.flows.find(flow => flow.id === 'flow-x')!
-      const agedTask = aged.tasks.find(t => t.id === 'x1')!
-      expect(agedFlow.archived).toBe(true)
-      expect(isDagArchived(agedTask)).toBe(true)
-
-      // 失败/取消立即离开活跃集：flow 归档且节点淡化，两侧一致。
-      await ledger.createFlow('flow-y', 'Flow Y', undefined, SESSION_A, WORKSPACE)
-      await ledger.record(makeNewTask({ id: TaskId('y1'), title: 'Y1', flowId: 'flow-y' }), 8)
-      await ledger.transition(TaskId('y1'), 'failed')
-      const failedSnap = await buildPanelSnapshot(ctx, ledger, makeReports(), Date.now())
-      expect(failedSnap.flows.find(flow => flow.id === 'flow-y')?.archived).toBe(true)
-      expect(isDagArchived(failedSnap.tasks.find(t => t.id === 'y1')!)).toBe(true)
+      // 手动归档任务 → 宿主面板与客户端 DAG 都视为已归档。
+      await ledger.archiveTask(TaskId('x1'), true)
+      const archived = await buildPanelSnapshot(ctx, ledger, makeReports(), Date.now())
+      const archivedTask = archived.tasks.find(t => t.id === 'x1')!
+      expect(archivedTask.archived).toBe(true)
+      expect(isDagArchived(archivedTask)).toBe(true)
       expect(ARCHIVE_AGE_MS).toBe(CLIENT_ARCHIVE_AGE_MS)
     } finally {
       await harness.dispose()

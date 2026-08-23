@@ -143,9 +143,9 @@ export interface HandoffEntry {
 }
 
 /**
- * One flow: a named DAG container for tasks (v1.4). The container has no
- * status of its own — active/archived is derived from its tasks, so adding a
- * task to an archived flow reactivates it automatically.
+ * One flow: a named DAG container for tasks (v1.4). Archiving is a user
+ * action, never automatic: a flow stays active until it is manually archived,
+ * and unarchiving returns it to the active listing.
  */
 export interface FlowRecord {
   readonly id: string
@@ -154,6 +154,8 @@ export interface FlowRecord {
   readonly createdBy: SessionId
   readonly workspacePath: string
   readonly createdAt: string
+  /** Manual archive marker; never derived from task state. */
+  readonly archived?: boolean
 }
 
 /** One option of a structured question; structurally equal to the official
@@ -215,7 +217,7 @@ export interface TaskRecord {
   readonly workspacePath: string
   /** The task instruction delivered to the recipient. */
   readonly content: string
-  /** Short display title; list/DAG nodes prefer it over content. */
+  /** Short display title (≤20 chars); list/DAG nodes prefer it over content. */
   readonly title?: string
   /** Current lifecycle position. */
   readonly status: TaskStatus
@@ -262,6 +264,8 @@ export interface TaskRecord {
   readonly flowId?: string
   /** Handoff documents from settled predecessors; dispatched with the task. */
   readonly handoffs?: readonly HandoffEntry[]
+  /** Manual archive marker; archiving is a user action, never automatic. */
+  readonly archived?: boolean
   /** ISO-8601 creation stamp. */
   readonly createdAt: string
   /** ISO-8601 stamp of the last status change. */

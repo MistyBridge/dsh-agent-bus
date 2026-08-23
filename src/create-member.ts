@@ -92,6 +92,8 @@ export interface OnboardPlan {
   readonly description?: string
   /** Non-fatal notices accumulated during parsing (mcp / modules). */
   readonly warnings: readonly string[]
+  /** Model for the created agent, resolved from the caller; supplies `{{model}}`. */
+  readonly model?: string
 }
 
 /** Parser outcome: a validated plan, or a field-naming refusal. */
@@ -209,6 +211,10 @@ export function parseCreateMemberInput(raw: unknown): ParseResult {
   }
   if (typeof input.name !== 'string' || input.name.trim() === '') {
     return refusal('create_member: field "name" must be a non-empty string')
+  }
+  const nameTrimmed = input.name.trim()
+  if (nameTrimmed.length > 20) {
+    return refusal(`create_member: field "name" must be at most 20 characters; got ${nameTrimmed.length}`)
   }
 
   let role: string | undefined
@@ -502,6 +508,9 @@ async function runOnboarding(
         cwd: workspace.path,
         ...(host.agentPresets !== undefined ? { agentPreset: host.agentPresets.defaultId } : {}),
       },
+      // `{{model}}` reads agent.options.model; without a value the persona
+      // section fails to render, so pin the caller's model on the new agent.
+      ...(plan.model !== undefined ? { agentOptions: { model: plan.model } } : {}),
       setup: buildSetup(host, plan),
     })
   } catch (error) {

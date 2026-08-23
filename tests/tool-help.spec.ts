@@ -96,12 +96,14 @@ describe('TOOL_DOCS / TOOL_NAMES completeness', () => {
     }
   })
 
-  it('the documented set matches the tools.ts registration surface (19, no tool_help)', () => {
-    // 19 个文档工具:与 tools.ts 的 checkedTool 注册集一致(含 reassign_task,
+  it('the documented set matches the tools.ts registration surface (21, no tool_help)', () => {
+    // 21 个文档工具:与 tools.ts 的 checkedTool 注册集一致(含 reassign_task,
     // 不含 respond_approval——那是 approval-bridge.ts 的另一注册面)。
-    expect(TOOL_NAMES).toHaveLength(19)
+    expect(TOOL_NAMES).toHaveLength(21)
     expect(TOOL_NAMES).toContain('reassign_task')
     expect(TOOL_NAMES).toContain('create_member')
+    expect(TOOL_NAMES).toContain('archive_task')
+    expect(TOOL_NAMES).toContain('archive_flow')
     expect(TOOL_NAMES).not.toContain('tool_help')
     expect(TOOL_NAMES).not.toContain('respond_approval')
   })

@@ -4,7 +4,7 @@
  * 渐进式披露（与 skill-system 的「catalog 短 + body 按需」同构）：
  * - {@link USAGE_OVERVIEW} 是常驻系统提示的**简短总览**（路由 + header 约定 +
  *   tool_help 指引），替代原先一次性注入的 8.6KB 长文；
- * - {@link TOOL_DOCS} 是 19 个工具的**完整说明书**，仅经 `tool_help({ tool })`
+ * - {@link TOOL_DOCS} 是 21 个工具的**完整说明书**，仅经 `tool_help({ tool })`
  *   工具在模型需要时披露（工具结果 = model-visible disclosure path）。
  *
  * 内容以 `src/tools.ts` 的 checkedTool 定义、`src/authorize.ts` 鉴权、ledger
@@ -35,6 +35,8 @@ export const TOOL_NAMES = [
   'answer_question',
   'claim_task',
   'create_member',
+  'archive_task',
+  'archive_flow',
 ] as const
 
 /** 每个工具的完整说明书，键为 {@link TOOL_NAMES}。 */
@@ -63,10 +65,10 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 鉴权:caller 须在线且在工作区。
 - 注意:一个 flow 就是一个 DAG;流程内全部任务结算后该 flow 归档。`,
 
-  rename_flow: `rename_flow 重命名你创建的 flow(可选替换其说明)。
+  rename_flow: `rename_flow 重命名一个 flow(可选替换其说明)。
 - 参数:flow_id(必), name(必, ≤20 字符, 简明概括任务组核心内容), description(可选——传空串清空、省略保留现状)。
 - 语义:新名须在该 workspace 唯一——撞已有 flow 名会被拒,并在报错里列出已有名。
-- 鉴权:仅流程创建者(flow.createdBy === callerId);其他会话改不得。
+- 鉴权:caller 须在线且在该 flow 的 workspace(工作区成员即可改,不限创建者)。
 - 典型用法:流程名不再贴切时改名;用 description 补齐/更新流程说明。`,
 
   reassign_task: `reassign_task 由 initiator 改派一个未结算任务,不重建任务:task id、历史、dependencies、flow 归属、验收标准都保留——只有执行方/验收方变化。
@@ -83,12 +85,12 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 
   list_flows: `list_flows 列出你工作区的流程。
 - 参数:无。
-- 返回:每项 { id, name, description?, taskCount, unsettledCount, archived }。archived = 无未结算任务(且该 flow 有任务)。
+- 返回:每项 { id, name, description?, taskCount, unsettledCount, archived }。unsettledCount = 未结算任务数;archived = 手动归档标记(archive_flow 设置,永不自动派生)。
 - 鉴权:caller 须在线且在工作区;仅返回同 workspace 的 flow。
 - 典型用法:查看有哪些流程、各自有多少任务/未结算、是否已归档;配合 create_task(flow_id) 向流程加活。`,
 
   create_task: `create_task(MEDIUM)建一个任务节点给 live peer:一份必须产生可验收结果的工作。对方逐个执行其被派发的任务(每任务自己一轮),你无需控制节奏。
-- 参数:target(必, 执行方, 来自 list_peers), content(必, 任务说明 ≤maxContentLength), title(必, 1–80), mode(可选 'followup'|'steer', 默认 'steer'=优先级通道,先于任何待认领 note;显式 'followup' 则 FIFO 排在已有消息后), reviewer(可选, 验收方, 默认 initiator), task_id(可选——回答对方 request_input 用), dependencies(可选数组, 前置任务 id), acceptance_criteria(可选, 最低验收线 ≤2000), flow_id(可选)。
+- 参数:target(必, 执行方, 来自 list_peers), content(必, 任务说明 ≤maxContentLength), title(必, 1–20), mode(可选 'followup'|'steer', 默认 'steer'=优先级通道,先于任何待认领 note;显式 'followup' 则 FIFO 排在已有消息后), reviewer(可选, 验收方, 默认 initiator), task_id(可选——回答对方 request_input 用), dependencies(可选数组, 前置任务 id), acceptance_criteria(可选, 最低验收线 ≤2000), flow_id(可选)。
 - 语义:无依赖 → 立刻投递(有依赖且未结算 → 待投递 queued,依赖结算后自动派发)。target 可休眠(wake-on-delivery),否则排队。reviewer 显式指定则独立验收;self-execution(target=caller)必须指定第三方 reviewer。
 - 鉴权:authorizePeerOrDormant——caller 在线且在工作区;target 须为同 workspace 会话(可休眠);subagent 不可派发。maxPendingPerAgent 上限超了拒绝。
 - 典型用法:派一个可验收的交付物;用 task_id 回答对方的 request_input(任务从 input-required 恢复 working)。
@@ -102,7 +104,7 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 
   list_tasks: `list_tasks 列台账里的活跃任务。
 - 参数:scope(可选 'inbox'|'outbox', 默认 'inbox'), status(可选, 只列该状态)。
-- 语义:inbox = 派发给你的任务(按你执行顺序);outbox = 你发起的任务。仅活跃任务可见:failed/canceled/rejected 立即离开列表;completed 待验收仍活跃(含报告文本);settled success 超过 24h 归档。历史在面板与日志。
+- 语义:inbox = 派发给你的任务(按你执行顺序);outbox = 你发起的任务。仅活跃任务可见:归档是手动动作(archive_task),永不自动;取消归档即恢复可见。历史在面板与日志。
 - 鉴权:基于 caller 自身的 inbox/outbox,无需他人授权。
 - 注意:completed 待验收任务带报告,读它再 settle。`,
 
@@ -159,11 +161,25 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 注意:只有 submitted(或 working)可 claim;其他状态报错。`,
 
   create_member: `create_member 一键入职:为工作区创建一位正式成员。
-- 参数:workspace(必, 路径或 id), name(必, 会名), role(可选, 注入为 system-prompt section 的角色说明), skills(可选, 运行时 skill 定义数组 {name,description,content}), permissions(可选, preset 名 或 {sandbox, approval} 旋钮), flow(可选, 加入的 flow), description(可选, 能力卡 ≤200), modules(可选, 预留扩展点)。
+- 参数:workspace(必, 路径或 id), name(必, 会名 ≤20 字), role(可选, 注入为 system-prompt section 的角色说明), skills(可选, 运行时 skill 定义数组 {name,description,content}), permissions(可选, preset 名 或 {sandbox, approval} 旋钮), flow(可选, 加入的 flow), description(可选, 能力卡 ≤200), modules(可选, 预留扩展点)。
 - 语义:创建会话(绑 workspace)→ 重命名 → 注入 role(section)→ 挂载 skills → 配置 permissions(preset 或显式旋钮)→ 可选加入 flow → 写能力卡。baseline 组合 = deployment 默认 agent preset(存在时)。mcp/modules 本期接收但跳过(仅告警,不报错)。任一步失败回滚已建部分,不留半成品。
 - 鉴权:caller 须在线且在工作区。
 - 典型用法:扩编团队、给新人一次性配好角色/权限/技能/卡片。
 - 注意:只用于真实成员,别用它创建一次性探路会话;permissions 旋钮需在沙箱/审批允许范围内。`,
+
+  archive_task: `archive_task 手动归档/取消归档一个任务(永不自动)。
+- 参数:task_id(必), archived(可选布尔, 默认 true——true 归档, false 取消归档)。
+- 语义:归档是可见性标记,与生命周期正交:queued/working/completed 都可归档,可逆。归档后该任务从 list_tasks 与活跃列表移出;取消归档恢复。
+- 鉴权:仅任务参与者可归档(canReadTask: assignedBy/assignedTo/assignedReviewer)。
+- 典型用法:把已收尾但暂不想删除的任务收进归档;或把误归档的任务恢复。
+- 注意:归档不改变状态/不打断执行,只是从活跃视图隐藏;历史一直在台账与面板。`,
+
+  archive_flow: `archive_flow 手动归档/取消归档一个流程(永不自动)。
+- 参数:flow_id(必), archived(可选布尔, 默认 true——true 归档, false 取消归档)。
+- 语义:流程归档状态独立于其任务,只有用户动作切换;不因任务状态自动派生。归档后 flow 从活跃列表移到归档区;取消归档恢复。
+- 鉴权:caller 须在线且在该 flow 的 workspace(工作区成员即可,不限创建者)。
+- 典型用法:整个流程收尾后手动归档;或误归档后恢复。
+- 注意:归档不改变任务状态;flow 的任务仍需逐个自行处理。`,
 }
 
 /** 常驻系统提示的简短总览(替代原先一次性注入的长文)。 */

@@ -8,7 +8,7 @@ import type { BuildFingerprint } from './fingerprint.ts'
 
 /** The build-time identity of THIS compiled code (decision 7). */
 export const BUILD_FINGERPRINT: BuildFingerprint = {
-  id: "3dc55fa02bf9ba8f",
-  buildTime: "2026-08-23T15:13:21.248Z",
+  id: "7824a450a8e41cb6",
+  buildTime: "2026-08-23T17:21:32.655Z",
   gitCommit: null,
 }

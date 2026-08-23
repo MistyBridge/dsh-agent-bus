@@ -4,8 +4,8 @@
  * 覆盖:
  * - create_flow:同工作区重名创建被拒(报错含已有流程名)、无意义名(纯数字/纯符号)
  *   放行但返回命名建议、有意义名不附建议、空名仍拒绝;
- * - rename_flow:创建者可改名并更新 description、重名改名被拒、非创建者被拒
- *   (「仅流程创建者可改名」)、未知流程 id 被拒;
+ * - rename_flow:创建者可改名并更新 description、重名改名被拒、同工作区非创建者可改名
+ *   (工作区成员)、不同工作区会话被拒、未知流程 id 被拒;
  * - ledger.renameFlow:description 传空串清除、缺省保留;
  * - panel-model 的 flowsOfWorkspace 投影保留 description(供 DAG 列表截断展示)。
  *
@@ -13,6 +13,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { flowsOfWorkspace, type FlowView } from '../src/client/panel-model.ts'
 import {
   createToolHarness,
@@ -125,12 +126,25 @@ describe('rename_flow(决策 8)', () => {
     ).rejects.toThrow(/该工作区已有同名流程『B 流程』/)
   })
 
-  it('非创建者改名被拒「仅流程创建者可改名」', async () => {
+  it('同工作区的非创建者(工作区成员)可改名', async () => {
     const harness = await newHarness()
     const flowId = await createFlow(harness, 'A 流程')
+    const result = await harness.run(
+      'rename_flow',
+      { flow_id: flowId, name: 'B 名' },
+      SESSION_B,
+    ) as { flowId: string; name: string }
+    expect(result).toEqual({ flowId, name: 'B 名' })
+    expect(harness.ledger.getFlow(flowId)?.name).toBe('B 名')
+  })
+
+  it('不同工作区的会话改名被拒', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SessionId('session-other'), { cwd: '/elsewhere' }))
+    const flowId = await createFlow(harness, 'A 流程')
     await expect(
-      harness.run('rename_flow', { flow_id: flowId, name: 'X 流程' }, SESSION_B),
-    ).rejects.toThrow(/仅流程创建者可改名/)
+      harness.run('rename_flow', { flow_id: flowId, name: 'X 流程' }, SessionId('session-other')),
+    ).rejects.toThrow(/different workspace/)
   })
 
   it('未知流程 id 被拒', async () => {
