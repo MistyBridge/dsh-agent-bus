@@ -149,6 +149,49 @@ export interface FlowRecord {
   readonly createdAt: string
 }
 
+/** One option of a structured question; structurally equal to the official
+ * `ask_user_question` option (`{ label, description? }`), defined here so the
+ * out-of-repo plugin carries no runtime dependency on the tool package. */
+export interface PendingQuestionOption {
+  /** Short user-facing option label; the answer's `selected` references it. */
+  label: string
+  /** One sentence explaining the tradeoff or impact. */
+  description?: string
+}
+
+/** One structured question a worker asked via `ask_user_question` while
+ * executing a task; persisted on the row while the task is `input-required`
+ * awaiting the initiator's answer. */
+export interface PendingQuestion {
+  /** Stable id echoed in the answer. */
+  id: string
+  /** The specific question to answer. */
+  question: string
+  /** Optional short heading, such as "Confirm" or "Choose Mode". */
+  header?: string
+  /** Choices shown to the answerer; empty when the question is free-form. */
+  options: PendingQuestionOption[]
+  /** Whether more than one option may be selected. */
+  multiSelect: boolean
+}
+
+/** One answer item; structurally equal to the official
+ * `AskUserQuestionAnswerItem` (`{ id, selected, custom? }`). */
+export interface QuestionAnswerItem {
+  /** The pending question id being answered. */
+  id: string
+  /** Selected option label(s). */
+  selected: string[]
+  /** Optional free-text answer. */
+  custom?: string
+}
+
+/** The answer payload returned to the worker; structurally equal to the
+ * official `AskUserQuestionAnswer` (`{ answers: [...] }`). */
+export interface QuestionAnswer {
+  answers: QuestionAnswerItem[]
+}
+
 /**
  * One durable task row.
  */
@@ -181,6 +224,9 @@ export interface TaskRecord {
   readonly reportRef?: string
   /** The question the worker asked, present while `input-required`. */
   readonly question?: string
+  /** Structured questions the worker asked via `ask_user_question`, present
+   * while the task is `input-required` awaiting the initiator's answer. */
+  readonly pendingQuestions?: readonly PendingQuestion[]
   /** Latest verdict: success is terminal; failure returns the row to `submitted` for rework. */
   readonly outcome?: TaskOutcome
   /** Review feedback: on failure it is the rework instruction. */
@@ -213,4 +259,32 @@ export interface TaskRecord {
   readonly createdAt: string
   /** ISO-8601 stamp of the last status change. */
   readonly updatedAt: string
+}
+
+/**
+ * The harness's approval outcome vocabulary (decision 6). Structurally equal
+ * to the official `ApprovalOutcome` from `@deepseek-ai/dsh-user-approval` but
+ * defined here so the out-of-repo plugin carries no runtime dependency on
+ * that package — the bridge only ever returns these strings through the
+ * `approval/request` waterfall.
+ */
+export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/**
+ * The minimal shape of one `approval/request` payload the bridge consumes.
+ * Structurally a subset of the official `ApprovalRequest` (agent, toolName,
+ * callId, reason, signal) — defined here because the official type is not
+ * resolvable from this out-of-repo plugin.
+ */
+export interface ApprovalRequestLike {
+  /** The agent on whose behalf the question is asked. */
+  readonly agent?: { readonly id: SessionId }
+  /** The tool the question is about. */
+  readonly toolName: string
+  /** The exact tool call being decided, when the asker has one. */
+  readonly callId?: string
+  /** The asker's human-readable explanation of WHY it is asking. */
+  readonly reason?: string
+  /** Aborting withdraws the question. */
+  readonly signal?: { readonly aborted: boolean }
 }

@@ -61,6 +61,8 @@ const TASK_NOTE_KEY = 'dsh-agent-bus.note.tasks'
 const DAG_NOTE_KEY = 'dsh-agent-bus.note.dag'
 const NOTE_MIN_W = 360
 const NOTE_MIN_H = 320
+const STALE_DISMISS_KEY = 'dsh-agent-bus.stale-dismissed'
+const RECOVERY_DISMISS_KEY = 'dsh-agent-bus.recovery-dismissed'
 const POLL_MS = 2000
 const STYLE_ID = 'dsh-agent-bus-panel-styles'
 
@@ -318,7 +320,7 @@ function ensurePanelStyles(): void {
   if (document.getElementById(STYLE_ID)) return
   const style = document.createElement('style')
   style.id = STYLE_ID
-  style.textContent = PANEL_CSS
+  style.textContent = PANEL_CSS + PANEL_STALE_CSS
   document.head.appendChild(style)
 }
 
@@ -580,6 +582,12 @@ const css = {
   abPCapsuleCount: 'abPCapsuleCount',
   abPCapsuleMeta: 'abPCapsuleMeta',
   abPCapsuleDot: 'abPCapsuleDot',
+  abPStaleBadge: 'abPStaleBadge',
+  abPStale: 'abPStale',
+  abPStaleText: 'abPStaleText',
+  abPStaleClose: 'abPStaleClose',
+  abPRecovery: 'abPRecovery',
+  abPRecoveryText: 'abPRecoveryText',
   abPPreview: 'abPPreview',
   abPPreviewHead: 'abPPreviewHead',
   abPPreviewWs: 'abPPreviewWs',
@@ -673,6 +681,20 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
   const floatRef = useRef<HTMLElement | null>(null)
   const dagEscRef = useRef<(() => boolean) | null>(null)
   const [storedWorkspace, setStoredWorkspace] = useState<string | null>(readStoredWorkspace)
+  const [dismissedStale, setDismissedStale] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(STALE_DISMISS_KEY)
+    } catch {
+      return null
+    }
+  })
+  const [dismissedRecovery, setDismissedRecovery] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(RECOVERY_DISMISS_KEY)
+    } catch {
+      return null
+    }
+  })
   const [nowMs, setNowMs] = useState(() => Date.now())
   const rootRef = useRef<HTMLDivElement>(null)
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
@@ -909,6 +931,17 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
   }
 
   const wsTitle = workspace?.title ?? '未选择工作区'
+  // Decision 7 hint: the running host predates the latest build. A dismissed
+  // message stays hidden until a NEW update produces a different message.
+  const staleMessage = snapshot.instanceStale === true ? (snapshot.staleMessage ?? null) : null
+  const showStale = staleMessage !== null && dismissedStale !== staleMessage
+  // Decision 10 C hint: this boot re-woke stranded workers. Dismissed once per
+  // recovery batch (keyed by recoveryAt), so a later recovery shows again.
+  const recoveryCount = snapshot.recoveredWorkers ?? 0
+  const recoveryKey = snapshot.recoveryAt == null ? null : String(snapshot.recoveryAt)
+  const showRecovery = recoveryCount > 0
+    && recoveryKey !== null
+    && dismissedRecovery !== recoveryKey
   const emptyLabel = archiveMode
     ? (sessionFilter === null ? '暂无归档任务' : '该会话暂无归档任务')
     : (sessionFilter === null ? '暂无活跃任务' : '该会话暂无活跃任务')
@@ -931,6 +964,14 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
           ? <span className={css.abPCapsuleDot} />
           : <span className={css.abPCapsuleCount}>{activeCount}</span>}
         <span className={css.abPCapsuleMeta}>{snapshot.workspaces.length} ws</span>
+        {snapshot.instanceStale === true && (
+          <span
+            className={css.abPStaleBadge}
+            title={snapshot.staleMessage ?? '代码已更新,需重启生效'}
+          >
+            !
+          </span>
+        )}
       </button>
 
       {launcherOpen && (
@@ -994,6 +1035,48 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
             </button>
           </div>
           <div className={css.abPNoteBody}>
+            {showRecovery && (
+              <div className={css.abPRecovery} role="status">
+                <span className={css.abPRecoveryText}>
+                  {`上次启动已自动恢复 ${recoveryCount} 个滞留任务的工作会话,工具已恢复完整`}
+                </span>
+                <button
+                  type="button"
+                  className={css.abPStaleClose}
+                  aria-label="关闭恢复提示"
+                  onClick={() => {
+                    setDismissedRecovery(recoveryKey)
+                    try {
+                      localStorage.setItem(RECOVERY_DISMISS_KEY, recoveryKey)
+                    } catch {
+                      /* private mode */
+                    }
+                  }}
+                >
+                  <IconCloseOutline16 size={14} />
+                </button>
+              </div>
+            )}
+            {showStale && (
+              <div className={css.abPStale} role="status">
+                <span className={css.abPStaleText}>{staleMessage}</span>
+                <button
+                  type="button"
+                  className={css.abPStaleClose}
+                  aria-label="关闭更新提示"
+                  onClick={() => {
+                    setDismissedStale(staleMessage)
+                    try {
+                      localStorage.setItem(STALE_DISMISS_KEY, staleMessage ?? '')
+                    } catch {
+                      /* private mode */
+                    }
+                  }}
+                >
+                  <IconCloseOutline16 size={14} />
+                </button>
+              </div>
+            )}
       <aside className={css.abPDrawer}>
         <div className={css.abPTop}>
           <div className={css.abPWs}>
@@ -1311,6 +1394,73 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
     </div>
   )
 }
+
+/** Decision-7 stale-hint styles, appended to the injected sheet. */
+const PANEL_STALE_CSS = `
+.abPStaleBadge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-warn-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.abPStale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 50%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.abPStaleText {
+  flex: 1;
+}
+
+.abPStaleClose {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+
+.abPStaleClose:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.abPRecovery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.abPRecoveryText {
+  flex: 1;
+}
+`
 
 /** Fallback sheet used when the CSS-module import is not a raw stylesheet. */
 const PANEL_CSS = "/* v1.1 task panel. Class prefix abP* stays clear of the host. Colors are\r\n   --dsw-alias-* tokens only; motion stays ≤150ms. */\r\n\r\n\r\n\r\n.abPRoot {\r\n  position: contents;\r\n  font-family: var(--dsw-font-family);\r\n  color: var(--dsw-alias-label-primary);\r\n  line-height: 1.45;\r\n}\r\n\r\n.abPCapsule {\r\n  position: fixed;\r\n  top: 50%;\r\n  right: 0;\r\n  z-index: 40;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 6px;\r\n  width: 48px;\r\n  min-height: 84px;\r\n  padding: 14px 6px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-right: none;\r\n  border-radius: 12px 0 0 12px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 90%, transparent);\r\n  color: var(--dsw-alias-label-primary);\r\n  box-shadow: -6px 0 20px var(--dsw-alias-bg-mask-2);\r\n  backdrop-filter: blur(12px);\r\n  cursor: pointer;\r\n  transform: translateY(-50%);\r\n  transition: transform 150ms var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPCapsule:focus-visible {\r\n  outline: 2px solid var(--dsw-alias-state-business-primary);\r\n  outline-offset: 2px;\r\n}\r\n\r\n.abPCapsule[data-open] {\r\n  border-color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPCapsuleCount {\r\n  font-size: 22px;\r\n  font-weight: 600;\r\n  line-height: 28px;\r\n  font-variant-numeric: tabular-nums;\r\n  letter-spacing: -0.03em;\r\n}\r\n\r\n.abPCapsuleMeta {\r\n  font-size: 11px;\r\n  line-height: 14px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPCapsuleDot {\r\n  width: 8px;\r\n  height: 8px;\r\n  border-radius: 50%;\r\n  background: var(--dsw-alias-label-tertiary);\r\n  opacity: 0.65;\r\n}\r\n\r\n.abPCapsule[data-loading] .abPCapsuleDot,\r\n.abPCapsule[data-loading] .abPCapsuleCount {\r\n  animation: abPPulse 1.2s var(--ds-ease-in-out, ease) infinite;\r\n}\r\n\r\n.abPPreview {\r\n  position: fixed;\r\n  top: 50%;\r\n  right: 58px;\r\n  z-index: 41;\r\n  width: 280px;\r\n  padding: 14px 16px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 12px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 94%, transparent);\r\n  box-shadow: -8px 6px 24px var(--dsw-alias-bg-mask-2);\r\n  backdrop-filter: blur(12px);\r\n  transform: translateY(-50%);\r\n  pointer-events: none;\r\n}\r\n\r\nhtml[data-agent-bus-panel-open] .abPPreview {\r\n  display: none;\r\n}\r\n\r\n.abPPreviewHead {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  margin-bottom: 12px;\r\n  padding-bottom: 10px;\r\n  border-bottom: 1px solid var(--dsw-alias-border-l1);\r\n}\r\n\r\n.abPPreviewWs {\r\n  font-size: 13px;\r\n  font-weight: 600;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-primary);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n.abPPreviewStats {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPPreviewList {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n}\r\n\r\n.abPPreviewRow {\r\n  display: grid;\r\n  grid-template-columns: 8px minmax(0, 1fr);\r\n  gap: 10px;\r\n  align-items: start;\r\n}\r\n\r\n.abPPreviewTo {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPPreviewText {\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-primary);\r\n  overflow: hidden;\r\n  display: -webkit-box;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\r\n}\r\n\r\n.abPPreviewEmpty {\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPLauncher {\r\n  position: fixed;\r\n  right: 60px;\r\n  top: 50%;\r\n  z-index: 45;\r\n  display: grid;\r\n  grid-template-columns: repeat(3, 1fr);\r\n  gap: 8px;\r\n  width: 228px;\r\n  padding: 12px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 16px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 92%, transparent);\r\n  box-shadow: -8px 8px 28px var(--dsw-alias-bg-mask-2);\r\n  backdrop-filter: blur(14px);\r\n  transform: translateY(-50%);\r\n}\r\n\r\n.abPLaunchTile {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 4px;\r\n  aspect-ratio: 1;\r\n  padding: 6px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 12px;\r\n  background: var(--dsw-alias-bg-layer-2);\r\n  color: var(--dsw-alias-label-primary);\r\n  font: inherit;\r\n  font-size: 12px;\r\n  line-height: 16px;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPLaunchTile:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPLaunchTile[data-active] {\r\n  border-color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPLaunchTile:disabled {\r\n  opacity: 0.38;\r\n  cursor: default;\r\n}\r\n\r\n.abPLaunchMark {\r\n  font-size: 16px;\r\n  font-weight: 600;\r\n  line-height: 22px;\r\n  color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPNote {\r\n  position: fixed;\r\n  z-index: 48;\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 360px;\r\n  min-height: 320px;\r\n  overflow: hidden;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 12px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 94%, transparent);\r\n  box-shadow: 0 16px 40px var(--dsw-alias-bg-mask-2);\r\n  backdrop-filter: blur(12px);\r\n  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);\r\n  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);\r\n}\r\n\r\n.abPNote[data-pinned] {\r\n  z-index: 49;\r\n  box-shadow: 0 18px 44px var(--dsw-alias-bg-mask-1);\r\n}\r\n\r\n.abPNote[data-front] {\r\n  z-index: 50;\r\n}\r\n\r\n.abPNoteBar {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex: none;\r\n  min-height: 36px;\r\n  padding: 4px 8px 4px 12px;\r\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\r\n  cursor: grab;\r\n  user-select: none;\r\n  touch-action: none;\r\n}\r\n\r\n.abPNoteBar:active {\r\n  cursor: grabbing;\r\n}\r\n\r\n.abPNoteTitle {\r\n  min-width: 0;\r\n  flex: 1;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 13px;\r\n  font-weight: 600;\r\n  line-height: 20px;\r\n}\r\n\r\n.abPNotePin[data-on] {\r\n  color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPNoteBody {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-height: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPNoteGrip {\r\n  position: absolute;\r\n  right: 2px;\r\n  bottom: 2px;\r\n  width: 14px;\r\n  height: 14px;\r\n  cursor: nwse-resize;\r\n  touch-action: none;\r\n  background:\r\n    linear-gradient(\r\n      135deg,\r\n      transparent 50%,\r\n      var(--dsw-alias-label-tertiary) 50%,\r\n      var(--dsw-alias-label-tertiary) 60%,\r\n      transparent 60%,\r\n      transparent 75%,\r\n      var(--dsw-alias-label-tertiary) 75%\r\n    );\r\n}\r\n\r\n.abPDrawer {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-height: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPTop {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex: none;\r\n  min-height: 56px;\r\n  padding: 10px 12px 10px 14px;\r\n  border-bottom: 1px solid var(--dsw-alias-border-l2);\r\n  background: var(--dsw-alias-bg-layer-1);\r\n}\r\n\r\n.abPWs {\r\n  position: relative;\r\n  min-width: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPWsBtn {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 36px;\r\n  padding: 6px 10px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 10px;\r\n  background: var(--dsw-alias-bg-layer-2);\r\n  color: var(--dsw-alias-label-primary);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPWsBtn:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPWsBtn:focus-visible,\r\n.abPClose:focus-visible,\r\n.abPSession:focus-visible,\r\n.abPTask:focus-visible,\r\n.abPDagNode:focus-visible,\r\n.abPDagTool:focus-visible,\r\n.abPFlow:focus-visible,\r\n.abPWsItem:focus-visible,\r\n.abPAllBtn:focus-visible,\r\n.abPAllToggle:focus-visible,\r\n.abPOfflineToggle:focus-visible {\r\n  outline: 2px solid var(--dsw-alias-state-business-primary);\r\n  outline-offset: 1px;\r\n}\r\n\r\n.abPWsTitle {\r\n  min-width: 0;\r\n  flex: 1;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 14px;\r\n  font-weight: 600;\r\n  line-height: 22px;\r\n}\r\n\r\n.abPWsChevron {\r\n  flex: none;\r\n  display: inline-flex;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPWsMenu {\r\n  position: absolute;\r\n  top: calc(100% + 6px);\r\n  left: 0;\r\n  right: 0;\r\n  z-index: 3;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 6px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 10px;\r\n  background: var(--dsw-alias-bg-layer-1);\r\n  box-shadow: 0 10px 24px var(--dsw-alias-bg-mask-2);\r\n}\r\n\r\n.abPWsItem {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  width: 100%;\r\n  padding: 8px 10px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPWsItem:hover,\r\n.abPWsItem[data-active] {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPWsItemPath {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n.abPClose {\r\n  flex: none;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 32px;\r\n  height: 32px;\r\n  padding: 0;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-secondary);\r\n  cursor: pointer;\r\n}\r\n\r\n.abPClose:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n  color: var(--dsw-alias-label-primary);\r\n}\r\n\r\n.abPBody {\r\n  display: flex;\r\n  min-height: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPSessions {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: none;\r\n  width: 160px;\r\n  min-width: 128px;\r\n  max-width: 280px;\r\n  padding: 10px 8px;\r\n  overflow: auto;\r\n  border-right: 1px solid var(--dsw-alias-border-l2);\r\n  background: var(--dsw-specific-sidebar-fill, var(--dsw-alias-bg-module-platform));\r\n}\r\n\r\n.abPResize {\r\n  position: absolute;\r\n  top: 0;\r\n  right: -3px;\r\n  z-index: 3;\r\n  width: 6px;\r\n  height: 100%;\r\n  cursor: col-resize;\r\n  touch-action: none;\r\n}\r\n\r\n.abPResize:hover,\r\n.abPResize:active {\r\n  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 40%, transparent);\r\n}\r\n\r\n.abPGroup {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin-top: 10px;\r\n  padding-top: 10px;\r\n  border-top: 1px solid var(--dsw-alias-border-l2);\r\n}\r\n\r\n.abPAll {\r\n  display: flex;\r\n  align-items: stretch;\r\n  gap: 2px;\r\n  margin-bottom: 6px;\r\n}\r\n\r\n.abPAllBtn {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  flex: 1;\r\n  min-height: 34px;\r\n  padding: 6px 8px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-primary);\r\n  font: inherit;\r\n  font-size: 13px;\r\n  font-weight: 600;\r\n  line-height: 20px;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPAllBtn:hover,\r\n.abPAllToggle:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPAllBtn[data-active],\r\n.abPSession[data-active] {\r\n  background: var(--dsw-alias-button-ghost-active-fill);\r\n}\r\n\r\n.abPAllToggle {\r\n  flex: none;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 28px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  cursor: pointer;\r\n}\r\n\r\n.abPAllToggle[data-open] {\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPAllToggle[data-open] svg {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n.abPAllToggle svg {\r\n  transition: transform 150ms var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPSessionList {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n}\r\n\r\n.abPSession {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 34px;\r\n  padding: 6px 8px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-primary);\r\n  font: inherit;\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPSession:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPSession[data-current] .abPSessionTitle {\r\n  font-weight: 600;\r\n}\r\n\r\n.abPSessionText {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 1px;\r\n  min-width: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPSessionTitle {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n.abPOffline {\r\n  font-size: 11px;\r\n  line-height: 16px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPOfflineToggle {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  width: 100%;\r\n  min-height: 30px;\r\n  margin-top: 4px;\r\n  padding: 4px 8px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  font: inherit;\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPOfflineToggle:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPOfflineToggle svg {\r\n  flex: none;\r\n  transition: transform 150ms var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPOfflineToggle[data-open] svg {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n.abPLive {\r\n  flex: none;\r\n  width: 7px;\r\n  height: 7px;\r\n  margin-top: 6px;\r\n  border-radius: 50%;\r\n  background: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPLive[data-on] {\r\n  background: var(--dsw-alias-state-success-primary);\r\n}\r\n\r\n.abPFlowHead {\r\n  padding: 2px 8px 6px;\r\n  font-size: 11px;\r\n  font-weight: 600;\r\n  line-height: 16px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPFlowList {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n}\r\n\r\n.abPFlowEmpty {\r\n  padding: 4px 8px 8px;\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPFlow {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 36px;\r\n  padding: 6px 8px;\r\n  border: none;\r\n  border-radius: 8px;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPFlow:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPFlow[data-active] {\r\n  background: var(--dsw-alias-button-ghost-active-fill);\r\n}\r\n\r\n.abPFlowName {\r\n  min-width: 0;\r\n  flex: 1;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n}\r\n\r\n.abPFlow[data-archived] .abPFlowName {\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPFlowCount {\r\n  flex: none;\r\n  min-width: 20px;\r\n  padding: 0 6px;\r\n  border-radius: 999px;\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n  color: var(--dsw-alias-label-secondary);\r\n  font-size: 11px;\r\n  line-height: 18px;\r\n  font-variant-numeric: tabular-nums;\r\n  text-align: center;\r\n}\r\n\r\n.abPFlow[data-active] .abPFlowCount {\r\n  color: var(--dsw-alias-state-business-primary);\r\n  background: var(--dsw-alias-state-business-tertiary);\r\n}\r\n\r\n.abPMain {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\r\n  flex: 1;\r\n  padding: 12px;\r\n  overflow: auto;\r\n}\r\n\r\n.abPEmpty {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 6px;\r\n  min-height: 160px;\r\n  padding: 24px 16px;\r\n  text-align: center;\r\n}\r\n\r\n.abPEmptyTitle {\r\n  font-size: 14px;\r\n  line-height: 22px;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPEmptyHint {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPTask {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  width: 100%;\r\n  padding: 10px 12px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 10px;\r\n  background: var(--dsw-alias-bg-layer-2);\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPTask:hover,\r\n.abPTask[data-focused] {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPTask[data-focused],\r\n.abPTask[data-current] {\r\n  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 50%, var(--dsw-alias-border-l2));\r\n}\r\n\r\n.abPTaskSummary {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  min-width: 0;\r\n}\r\n\r\n.abPTaskLine {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  min-width: 0;\r\n}\r\n\r\n.abPTaskPreview {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 14px;\r\n  line-height: 22px;\r\n}\r\n\r\n.abPTaskMeta {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n.abPDot {\r\n  width: 8px;\r\n  height: 8px;\r\n  margin-top: 7px;\r\n  border-radius: 50%;\r\n  background: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPDot[data-tone='business'] { background: var(--dsw-alias-state-business-primary); }\r\n.abPDot[data-tone='warning'] { background: var(--dsw-alias-state-warn-primary); }\r\n.abPDot[data-tone='success'] { background: var(--dsw-alias-state-success-primary); }\r\n.abPDot[data-tone='danger'] { background: var(--dsw-alias-state-error-primary); }\r\n.abPDot[data-tone='tertiary'] { background: var(--dsw-alias-label-tertiary); }\r\n\r\n.abPBadge {\r\n  flex: none;\r\n  padding: 0 7px;\r\n  border: 1px solid transparent;\r\n  border-radius: 5px;\r\n  font-size: 12px;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-secondary);\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPBadge[data-tone='business'] {\r\n  color: var(--dsw-alias-state-business-primary);\r\n  background: var(--dsw-alias-state-business-tertiary);\r\n}\r\n\r\n.abPBadge[data-tone='warning'] {\r\n  color: var(--dsw-alias-state-warn-label);\r\n  background: var(--dsw-alias-state-warn-tertiary);\r\n}\r\n\r\n.abPBadge[data-tone='success'] {\r\n  color: var(--dsw-alias-state-success-primary);\r\n  background: var(--dsw-alias-state-success-tertiary);\r\n}\r\n\r\n.abPBadge[data-tone='danger'] {\r\n  color: var(--dsw-alias-state-error-primary);\r\n  background: var(--dsw-alias-interactive-bg-hover-danger);\r\n}\r\n\r\n.abPBadge[data-kind='dashed'] {\r\n  border-color: var(--dsw-alias-state-warn-primary);\r\n  border-style: dashed;\r\n  background: transparent;\r\n}\r\n\r\n.abPBadge[data-kind='outline'] {\r\n  border-color: var(--dsw-alias-border-l3);\r\n  background: transparent;\r\n}\r\n\r\n.abPFloat {\r\n  position: fixed;\r\n  z-index: 50;\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  max-height: min(72vh, 560px);\r\n  overflow: auto;\r\n  padding: 14px 16px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 14px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 92%, transparent);\r\n  box-shadow: 0 18px 40px var(--dsw-alias-bg-mask-2);\r\n  backdrop-filter: blur(14px);\r\n  pointer-events: auto;\r\n}\r\n\r\n.abPFloatTop {\r\n  display: grid;\r\n  grid-template-columns: 8px minmax(0, 1fr) auto;\r\n  gap: 10px;\r\n  align-items: start;\r\n}\r\n\r\n.abPFloatTitle {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 14px;\r\n  line-height: 22px;\r\n}\r\n\r\n.abPChainArrow {\r\n  margin: 0 6px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPCalls {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n}\r\n\r\n.abPCall {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  padding: 10px 12px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 10px;\r\n  background: var(--dsw-alias-bg-layer-2);\r\n}\r\n\r\n.abPCallHead {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: baseline;\r\n  gap: 2px 0;\r\n}\r\n\r\n.abPCallWho {\r\n  font-size: 14px;\r\n  font-weight: 600;\r\n  line-height: 22px;\r\n  color: var(--dsw-alias-label-primary);\r\n}\r\n\r\n.abPCallRoles {\r\n  margin-left: 8px;\r\n  font-size: 11px;\r\n  line-height: 16px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPCallSummary {\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-secondary);\r\n  overflow-wrap: anywhere;\r\n}\r\n\r\n.abPCallCost {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n}\r\n\r\n.abPCallCostName {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-primary);\r\n}\r\n\r\n.abPContent {\r\n  max-height: 240px;\r\n  margin: 0;\r\n  padding: 10px 12px;\r\n  overflow: auto;\r\n  border-radius: 8px;\r\n  background: var(--dsw-alias-markdown-code-block);\r\n  color: var(--dsw-alias-label-secondary);\r\n  font-family: var(--ds-font-family-code);\r\n  font-size: 12px;\r\n  line-height: 20px;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n}\r\n\r\n.abPZone {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPZone[data-missing] {\r\n  color: var(--dsw-alias-state-error-primary);\r\n}\r\n\r\n.abPStaff {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding-top: 8px;\r\n  border-top: 1px solid var(--dsw-alias-border-l1);\r\n}\r\n\r\n.abPStaffHead {\r\n  font-size: 13px;\r\n  font-weight: 600;\r\n  line-height: 20px;\r\n  color: var(--dsw-alias-label-secondary);\r\n}\r\n\r\n.abPStaffRow {\r\n  display: grid;\r\n  grid-template-columns: 2em minmax(3em, 1fr);\r\n  gap: 4px 10px;\r\n  align-items: baseline;\r\n  padding: 8px 0 0;\r\n  border-top: 1px solid var(--dsw-alias-border-l1);\r\n  font-size: 13px;\r\n  line-height: 20px;\r\n}\r\n\r\n.abPRole {\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPStaffTitle {\r\n  min-width: 2em;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--dsw-alias-label-primary);\r\n}\r\n\r\n.abPTriple {\r\n  grid-column: 1 / -1;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 14px;\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-label-secondary);\r\n  font-variant-numeric: tabular-nums;\r\n}\r\n\r\n@keyframes abPPulse {\r\n  50% { opacity: 0.4; }\r\n}\r\n\r\n@keyframes abPRelease {\r\n  0%,\r\n  100% { box-shadow: 0 0 0 0 transparent; }\r\n  25%,\r\n  70% { box-shadow: 0 0 0 2px var(--dsw-alias-state-success-primary); }\r\n}\r\n\r\n.abPDagPane {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  flex: 1;\r\n}\r\n\r\n.abPDagCanvas {\r\n  position: relative;\r\n  min-width: 0;\r\n  min-height: 72px;\r\n  flex: 1 1 42%;\r\n  overflow: hidden;\r\n  cursor: grab;\r\n  touch-action: none;\r\n  overscroll-behavior: none;\r\n  user-select: none;\r\n  background-color: var(--dsw-alias-bg-layer-1);\r\n  background-image: radial-gradient(circle, var(--dsw-alias-border-l2) 1px, transparent 1.2px);\r\n}\r\n\r\n.abPDagCanvas[data-panning],\r\n.abPDagCanvas[data-dragging] {\r\n  cursor: grabbing;\r\n}\r\n\r\n.abPDagWorld {\r\n  position: absolute;\r\n  left: 0;\r\n  top: 0;\r\n  transform-origin: 0 0;\r\n  will-change: transform;\r\n}\r\n\r\n.abPDagSvg {\r\n  position: absolute;\r\n  display: block;\r\n  overflow: visible;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  pointer-events: none;\r\n}\r\n\r\n.abPDagTools {\r\n  position: absolute;\r\n  right: 10px;\r\n  top: 10px;\r\n  z-index: 2;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  padding: 4px;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 10px;\r\n  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 92%, transparent);\r\n  backdrop-filter: blur(10px);\r\n}\r\n\r\n.abPDagTool {\r\n  min-width: 28px;\r\n  height: 28px;\r\n  padding: 0 8px;\r\n  border: none;\r\n  border-radius: 7px;\r\n  background: transparent;\r\n  color: var(--dsw-alias-label-primary);\r\n  font: inherit;\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  cursor: pointer;\r\n}\r\n\r\n.abPDagTool:hover {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPDagZoom {\r\n  min-width: 40px;\r\n  padding: 0 4px;\r\n  font-size: 11px;\r\n  line-height: 16px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n  font-variant-numeric: tabular-nums;\r\n  text-align: center;\r\n}\r\n\r\n.abPDagEdge {\r\n  fill: none;\r\n  stroke: var(--dsw-alias-border-l3);\r\n  stroke-width: 1.5;\r\n  transition: stroke 150ms var(--ds-ease-in-out, ease), opacity 150ms var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPDagEdge[data-tone='ok'] {\r\n  stroke: var(--dsw-alias-state-success-primary);\r\n  color: var(--dsw-alias-state-success-primary);\r\n}\r\n\r\n.abPDagEdge[data-tone='wait'] {\r\n  stroke: var(--dsw-alias-state-warn-primary);\r\n  color: var(--dsw-alias-state-warn-primary);\r\n}\r\n\r\n.abPDagEdge[data-tone='fail'] {\r\n  stroke: var(--dsw-alias-state-error-primary);\r\n  color: var(--dsw-alias-state-error-primary);\r\n}\r\n\r\n.abPDagEdge[data-tone='self'],\r\n.abPDagEdge[data-tone='down'] {\r\n  stroke: var(--dsw-alias-state-business-primary);\r\n  color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPDagEdge[data-dim] {\r\n  opacity: 0.22;\r\n}\r\n\r\n.abPDagNode {\r\n  position: absolute;\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  justify-content: center;\r\n  gap: 2px;\r\n  height: 64px;\r\n  padding: 6px 8px;\r\n  overflow: hidden;\r\n  border: 1px solid var(--dsw-alias-border-l2);\r\n  border-radius: 8px;\r\n  background: var(--dsw-alias-bg-layer-2);\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: grab;\r\n  touch-action: none;\r\n  transition:\r\n    border-color 150ms var(--ds-ease-in-out, ease),\r\n    box-shadow 150ms var(--ds-ease-in-out, ease),\r\n    opacity 150ms var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPDagNode:hover,\r\n.abPDagNode[data-chain='self'] {\r\n  background: var(--dsw-alias-interactive-bg-hover);\r\n}\r\n\r\n.abPDagNode[data-ready] {\r\n  border-style: dashed;\r\n  border-color: var(--dsw-alias-state-business-primary);\r\n}\r\n\r\n.abPDagNode[data-blocked] {\r\n  border-color: var(--dsw-alias-state-warn-primary);\r\n}\r\n\r\n.abPDagNode[data-fail] {\r\n  border-color: var(--dsw-alias-state-error-primary);\r\n}\r\n\r\n.abPDagNode[data-ok] {\r\n  border-color: var(--dsw-alias-state-success-primary);\r\n}\r\n\r\n.abPDagNode[data-chain='self'] {\r\n  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, transparent);\r\n}\r\n\r\n.abPDagNode[data-flare] {\r\n  animation: abPRelease 2s var(--ds-ease-in-out, ease);\r\n}\r\n\r\n.abPDagNode[data-dragging] {\r\n  z-index: 2;\r\n  cursor: grabbing;\r\n}\r\n\r\n.abPDagNode[data-archived] {\r\n  opacity: 0.55;\r\n  cursor: default;\r\n  pointer-events: none;\r\n}\r\n\r\n.abPDagNode[data-dim] {\r\n  opacity: 0.4;\r\n}\r\n\r\n.abPDagNode[data-archived][data-dim] {\r\n  opacity: 0.4;\r\n}\r\n\r\n.abPDagNode[data-current] {\r\n  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 50%, var(--dsw-alias-border-l2));\r\n}\r\n\r\n.abPDagNodeTop {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n}\r\n\r\n.abPDagNode .abPDot {\r\n  margin-top: 0;\r\n  flex: none;\r\n}\r\n\r\n.abPDagNode .abPBadge {\r\n  padding: 0 5px;\r\n  font-size: 11px;\r\n  line-height: 18px;\r\n}\r\n\r\n.abPDagMark {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 11px;\r\n  line-height: 16px;\r\n  color: var(--dsw-alias-label-tertiary);\r\n}\r\n\r\n.abPDagNode[data-fail] .abPDagMark {\r\n  color: var(--dsw-alias-state-error-primary);\r\n}\r\n\r\n.abPDagNodeLabel {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n}\r\n\r\n.abPDagDetail {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-height: 0;\r\n  flex: 1 1 58%;\r\n  max-height: 70%;\r\n  overflow: hidden;\r\n  padding: 10px 12px 12px;\r\n  border-top: 1px solid var(--dsw-alias-border-l2);\r\n  background: var(--dsw-alias-bg-layer-1);\r\n}\r\n\r\n.abPReq {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-height: 6.5em;\r\n  flex: 1 1 auto;\r\n  overflow: auto;\r\n}\r\n\r\n.abPReq .abPContent {\r\n  min-height: 3.5em;\r\n  max-height: none;\r\n}\r\n\r\n.abPDagMore {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  flex: 0 1 auto;\r\n  min-height: 0;\r\n  max-height: 38%;\r\n  overflow: auto;\r\n}\r\n\r\n.abPDagDetail .abPContent,\r\n.abPFloat .abPContent {\r\n  max-height: none;\r\n}\r\n\r\n.abPDagFail {\r\n  font-size: 12px;\r\n  line-height: 18px;\r\n  color: var(--dsw-alias-state-error-primary);\r\n}\r\n\r\n@media (prefers-reduced-motion: reduce) {\r\n  .abPCapsule,\r\n  .abPDrawer,\r\n  .abPAllToggle svg,\r\n  .abPOfflineToggle svg,\r\n  .abPDagEdge,\r\n  .abPDagNode,\r\n  .abPCapsule[data-loading] .abPCapsuleDot,\r\n  .abPCapsule[data-loading] .abPCapsuleCount,\r\n  .abPDagNode[data-flare] {\r\n    transition: none;\r\n    animation: none;\r\n  }\r\n}\r\n"

@@ -2,7 +2,7 @@
 
 dsh-agent-bus 操作手册:工具参考、状态机、常见流程模板、配置。面向 agent 与人类使用者。
 
-## 工具参考(15 个)
+## 工具参考(17 个)
 
 ### 发现
 
@@ -10,6 +10,12 @@ dsh-agent-bus 操作手册:工具参考、状态机、常见流程模板、配�
 |---|---|
 | `list_peers` | 同工作区 live 会话 + 自维护卡片(description/capabilities)+ 状态 + 排队数;归档会话不出现 |
 | `update_card` | 维护自己的能力卡片;capabilities 为 kebab-case 机器键(≤8 个) |
+
+### 团队管理
+
+| 工具 | 说明 |
+|---|---|
+| `create_member` | 一键入职:workspace(路径或 id)+ name 必填;可选 role(persona section)、skills(技能定义)、permissions(预设名或 {sandbox, approval})、flow(加入流程)、description(能力卡片);默认挂部署默认 agent preset 作为基线;mcp/modules 接受但本期降级(仅 warning);任一步失败回滚已创建会话 |
 
 ### 通道(按规模路由)
 
@@ -27,6 +33,7 @@ dsh-agent-bus 操作手册:工具参考、状态机、常见流程模板、配�
 | `settle_task` | 验收方判定:success 释放下游(自动派发依赖它的任务);failure 同 id 重做(retries++,反馈即修改意见) |
 | `cancel_task` | 发起方取消(未结算);queued 任务静默取消;终态自动向下游传播 |
 | `request_input` | 执行方暂停提问(working → input-required);发起方用 create_task 带 task_id 回答 |
+| `answer_question` | 执行方任务中调用 dsh 官方 ask_user_question 时,问题转发给任务发起方;发起方用本工具回答(仅发起方可答) |
 | `reassign_task` | 发起方转派:换执行者(重投递)/换验收者;id/历史/依赖/流程全保留 |
 | `submit_handoff` | 结算任务的执行方为每个后向任务提交交接文档;投递时自动拼入下游内容 |
 

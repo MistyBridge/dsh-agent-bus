@@ -33,14 +33,20 @@ import type {} from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fileURLToPath } from 'node:url'
+import { BUILD_FINGERPRINT } from './build-fingerprint.ts'
 import { ReportStore } from './external.ts'
+import { isInstanceStale, readDiskFingerprint, staleMessage } from './fingerprint.ts'
 import { TaskLedger } from './ledger.ts'
-import { buildPanelSnapshot } from './panel.ts'
+import { buildPanelSnapshot, type RecoveryInfo, type StaleInfo } from './panel.ts'
+import { installApprovalBridge } from './approval-bridge.ts'
+import { registerQuestionBridge, QuestionRegistry } from './question-bridge.ts'
 import { DispatchRateLimiter } from './rate-limit.ts'
-import { buildDelayedMessage, buildTaskMessage, deliverTask } from './delivery.ts'
-import { dispatchOne, dispatchReadyTasks, releaseDependents } from './scheduler.ts'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { buildDelayedMessage, buildTaskMessage, deliverTask, notifySession } from './delivery.ts'
+import { dispatchOne, dispatchReadyTasks, releaseDependents, resumeStrandedTasks, shouldHeartbeatRedeliver } from './scheduler.ts'
 import { setWakeRoute } from './wake.ts'
-import { notifySession, registerAgentBusTools, type ToolsConfig } from './tools.ts'
+import { registerAgentBusTools, type ToolsConfig } from './tools.ts'
 import { TaskId } from './types.ts'
 
 export const name = 'agent-bus'
@@ -76,6 +82,14 @@ export interface Config {
   wakeModel?: string
   /** How long a working/submitted task may sit with an IDLE live executor before the heartbeat re-delivers it (default `300000`, 5 min). */
   retryIdleMs?: number
+  /** How recently an executor's activity (a turn ending, a claim, a report) suppresses the stranded-recovery heartbeat for it; defaults to `retryIdleMs` (decision 2). */
+  heartbeatCooldownMs?: number
+  /** How long the question bridge waits for the task initiator to answer a forwarded `ask_user_question` before failing closed (default `600000`, 10 min). */
+  questionTimeoutMs?: number
+  /** How long the approval bridge waits for the task initiator to answer a delegated approval before failing closed (default `600000`, 10 min). */
+  approvalTimeoutMs?: number
+  /** Fallback approvers for session-level approval requests with no owning task (decision 6 §5); empty means such requests defer to the harness chain. */
+  fullAccessSessions?: string[]
   /** Reports longer than this are externalized to the report store (default `400`). */
   maxInlineReport?: number
   /** Prompt-section order for the usage policy (default `118`). */
@@ -89,6 +103,9 @@ export const Config: z<Config> = z.object({
   maxMessagesPerMinute: z.natural().min(1).default(20),
   taskTimeoutMs: z.natural().min(60_000).default(7_200_000),
   offlineGraceMs: z.natural().min(60_000).default(900_000),
+  questionTimeoutMs: z.natural().min(1).default(600_000),
+  approvalTimeoutMs: z.natural().min(1).default(600_000),
+  fullAccessSessions: z.array(z.string()).default([]),
   maxInlineReport: z.natural().min(1).default(400),
   promptSectionOrder: z.natural().default(118),
 })
@@ -113,8 +130,13 @@ Never use a heavier channel than the ask needs, and never a lighter one: chat-as
 - When you receive a notice that a task you initiated timed out, decide whether to redo it with a new create_task; a timeout means the worker never finished or never answered.
 - cancel_task is the initiator's way to stop a task that is still submitted, working, or awaiting input. The worker is interrupted and asked for a summary, which lands on the canceled task.
 - request_input pauses a task you are working on when you need information only the initiator has; they answer with create_task passing task_id.
+- claim_task pulls a task you were assigned back into working when a re-delivery landed while the previous delivery was lost (a rejected step or a restart): claim it yourself, then report_task. Only the assigned executor may claim; claiming a task already in working is a no-op.
+- answer_question answers a structured question the worker asked via the dsh ask_user_question tool while executing YOUR task: the task pauses as input-required and the question (with options) is forwarded to you. Call answer_question(task_id, answers) with one {id, selected, custom?} per question. Only the task initiator may answer.
+- respond_approval answers a PM-delegated approval request (decision 6): when a worker executing YOUR task needs permission elevation (a sandbox escalation or privileged tool call), the approval is forwarded to you instead of the global approver. Call respond_approval(approval_id, decision) with decision=allow, or decision=reject WITH reason (why) and suggestion (a concrete remedy — a lower-privilege alternative, a task-scope change, or a permission adjustment), which are forwarded to the worker together. Only the task initiator may answer; an unanswered approval fails closed after the timeout.
 - update_card maintains your own capability card: a description for other agents and machine-readable capabilities for routing.
+- create_member (onboarding) creates a full team member in one call: workspace (path or id) and name are required; optional role (persona prose), skills (runtime skill definitions), permissions (preset name or {sandbox, approval} knobs), flow (join a flow), and description (capability card). The member receives the deployment's default agent preset as its baseline composition; mcp and modules are accepted but not implemented this phase (warnings, never errors). Any step failure rolls back the created session — no half-baked member survives. Use for real team members only, not throwaway explorers.
 - create_flow (LARGE) creates the roadmap container: plan first, then split the plan into tasks created with flow_id and dependencies. A task with unsettled dependencies is created 待投递(queued) — the scheduler delivers it automatically once every dependency settles, and failure propagates down the chain automatically when a dependency fails terminally. edit_task rewrites an undispatched task's requirement, acceptance criteria, dependencies, or flow membership if the DAG turns out wrong. The DAG view renders one flow at a time; flow-less tasks never appear there.
+- rename_flow renames a flow you created (and optionally replaces its description): the new name must be unique within the workspace, and only the creating session may rename. Use it when a flow's name no longer fits its content.
 - submit_handoff passes structured context DOWN a chain: when a task you executed settles, deliver each downstream task (one that lists your task in its dependencies) a handoff document — computed values, decisions, caveats. Dispatch concatenates those documents into the downstream task's content, so the next worker reads the chain's state instead of excavating old reports. You may also be the executor of your own task (target yourself) as long as a different session reviews it — nobody approves their own work.
 
 Incoming agent-bus messages open with a header naming the request kind, so read it first:
@@ -129,7 +151,7 @@ Only the reviewer can settle and only the initiator can cancel, so never mark yo
 
 Delivery reaches live sessions only. A refusal from create_task is authoritative: the peer is not reachable, not in your workspace, or its queue is full.
 
-Tools: list_peers, send_note, create_flow, create_task, edit_task, submit_handoff, list_flows, list_tasks, get_task, report_task, settle_task, cancel_task, request_input, update_card`
+Tools: list_peers, send_note, create_flow, rename_flow, create_task, edit_task, submit_handoff, list_flows, list_tasks, get_task, report_task, settle_task, cancel_task, request_input, claim_task, answer_question, respond_approval, update_card, create_member`
 
 /**
  * Mount the gateway.
@@ -157,6 +179,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
 
   const ledger = await TaskLedger.open(ctx)
+
+  // Decision 7: detect a lib/ rebuild this process did not pick up. The loaded
+  // code carries its build-time fingerprint; the disk fingerprint is read once
+  // at startup (both live next to this module in lib/). A mismatch surfaces as
+  // a startup warning and a panel hint — never an auto-restart, which would
+  // interrupt sessions without the user's decision.
+  const diskFingerprint = readDiskFingerprint(
+    fileURLToPath(new URL('./build-fingerprint.json', import.meta.url)),
+  )
+  const instanceInfo: StaleInfo = {
+    stale: isInstanceStale(BUILD_FINGERPRINT, diskFingerprint),
+    message: staleMessage(BUILD_FINGERPRINT, diskFingerprint),
+  }
+  if (instanceInfo.stale) {
+    ctx.logger.warn(`agent-bus: ${instanceInfo.message ?? '代码已更新,需重启生效'}`)
+  }
+
+  // Decision 10 C: the startup-recovery record (workers re-woken this boot).
+  // Written once after the recovery sweep settles; read by every state poll.
+  // Mutable local, structurally assignable to the readonly RecoveryInfo the
+  // snapshot builder consumes.
+  const recoveryInfo: { recoveredWorkers: number; recoveryAt: number | null } = {
+    recoveredWorkers: 0,
+    recoveryAt: null,
+  }
   setWakeRoute({
     ...(config.wakeProvider !== undefined ? { provider: config.wakeProvider } : {}),
     ...(config.wakeModel !== undefined ? { model: config.wakeModel } : {}),
@@ -170,13 +217,40 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     dshHomePath('agent-bus', 'cache'),
     dshHomePath('agent-bus', 'archive'),
   )
+  // Decision 9: the pending-question registry shared by the tools/execute
+  // bridge (registers an ask while waiting) and the answer_question tool
+  // (resolves one). Cleared on teardown so no ask outlives the plugin.
+  const questions = new QuestionRegistry()
+  ctx.effect(() => () => questions.clear('agent-bus plugin disposed'), 'agent-bus.questionRegistry')
+  // Decision 2: the stranded-recovery heartbeat must not kick an executor that
+  // is demonstrably ON the task. `lastActivity` records the last time a session
+  // ended a turn, claimed a delivery, or called a task-progress tool; the
+  // heartbeat skips a re-delivery while that timestamp is fresh. Process-local
+  // by design: a restart wipes it, and the freshly recovered row's own
+  // `updatedAt` re-arms the retry window anyway.
+  const lastActivity = new Map<string, number>()
+  const noteActivity = (sessionId: SessionId): void => {
+    lastActivity.set(String(sessionId), Date.now())
+  }
   registerAgentBusTools(ctx, resolved, {
     ledger,
     workspaces: ctx.workspaceRegistry,
     limiter,
     messageLimiter,
     reports,
+    questions,
+    noteActivity,
   })
+  registerQuestionBridge(ctx, ledger, questions, {
+    questionTimeoutMs: config.questionTimeoutMs ?? 600_000,
+  })
+  // Decision 6: delegate authorization-requiring operations from a working
+  // sub-agent to its task initiator (the PM). Registered after the question
+  // bridge; both are host-level and independent seams.
+  ctx.effect(() => installApprovalBridge(ctx, ledger, {
+    approvalTimeoutMs: config.approvalTimeoutMs ?? 600_000,
+    fullAccessSessions: (config.fullAccessSessions ?? []).map(id => SessionId(id)),
+  }), 'agent-bus.approvalBridge')
 
   // Task panel state route. The browser floater polls this snapshot every two
   // seconds. `webServer` exists only in Web profiles and may bind after this
@@ -200,7 +274,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       path: '/plugins/dsh-agent-bus/state',
       handler: async (_req, res) => {
         try {
-          const snapshot = await buildPanelSnapshot(ctx, ledger, reports)
+          const snapshot = await buildPanelSnapshot(ctx, ledger, reports, Date.now(), instanceInfo, recoveryInfo)
           res.writeHead(200, {
             'content-type': 'application/json; charset=utf-8',
             'cache-control': 'no-store',
@@ -286,6 +360,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.on('agent/inbox/claimed', ({ message, turn }) => {
     const task = ledger.findByMessage(message.id)
     if (task === undefined) return
+    // A claimed delivery is executor activity (decision 2): the worker is
+    // demonstrably on the task, so the heartbeat must not re-deliver it.
+    if (task.assignedTo !== undefined) noteActivity(task.assignedTo)
     // A claimed task starts working; a claimed answer resumes a paused task.
     if (task.status === 'submitted' || task.status === 'input-required') {
       void ledger.transition(task.id, 'working', { turn })
@@ -310,6 +387,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'turn/end') return
     const now = Date.now()
+    // Any completed turn is executor activity (decision 2): multi-turn work
+    // must not be re-delivered by the heartbeat just because the row sat in
+    // working between turns.
+    noteActivity(session.id)
     for (const task of ledger.listFor(session.id)) {
       if (task.status !== 'working') continue
       const key = String(task.id)
@@ -337,6 +418,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     void releaseDependents(ctx, ledger, TaskId(taskId))
   })
   void dispatchReadyTasks(ctx, ledger)
+  // Decision 10 B: after a restart, re-wake the executors of tasks a crash
+  // left stranded (working / submitted / input-required with a dormant
+  // executor) — no human needs to pull workers back online by hand. The
+  // recovered count feeds the panel hint (decision 10 C).
+  void resumeStrandedTasks(ctx, ledger).then(count => {
+    if (count > 0) {
+      recoveryInfo.recoveredWorkers = count
+      recoveryInfo.recoveryAt = Date.now()
+      ctx.logger.info(`agent-bus: 已自动恢复 ${count} 个滞留任务的执行会话`)
+    }
+  })
   const dagSweep = setInterval(() => {
     void dispatchReadyTasks(ctx, ledger)
   }, 60_000)
@@ -352,6 +444,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const timeoutMs = config.taskTimeoutMs ?? 7_200_000
   const offlineGraceMs = config.offlineGraceMs ?? 900_000
   const retryIdleMs = config.retryIdleMs ?? 300_000
+  // Decision 2: the heartbeat skips an executor whose activity is fresher than
+  // the cooldown; the cooldown defaults to the retry window itself.
+  const heartbeatCooldownMs = config.heartbeatCooldownMs ?? retryIdleMs
   const lastOfflineNotice = new Map<string, number>()
   const lastHeartbeat = new Map<string, number>()
   const timer = setInterval(() => {
@@ -365,12 +460,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       // model stopped early, the step was rejected, the process restarted)
       // — re-deliver so the driver claims it afresh. This is teams'
       // owned-open-task retry expressed in our delivery model; the 2h
-      // timeout stays the backstop.
-      if ((row.status === 'working' || row.status === 'submitted')
-        && row.assignedTo !== undefined) {
-        const executor = ctx.agents.get(row.assignedTo)
-        if (executor !== undefined && executor.status === 'idle'
-          && now - Date.parse(row.updatedAt) >= retryIdleMs) {
+      // timeout stays the backstop. Decision 2: an executor that was active
+      // within the cooldown is ON the task, so no re-delivery — the old
+      // "re-deliver refreshes updatedAt → kicks again" loop is closed by
+      // binding the cooldown to the EXECUTOR's activity, not the row's.
+      if (row.status === 'working' || row.status === 'submitted') {
+        const executor = row.assignedTo !== undefined ? ctx.agents.get(row.assignedTo) : undefined
+        const lastActive = row.assignedTo !== undefined
+          ? lastActivity.get(String(row.assignedTo))
+          : undefined
+        if (shouldHeartbeatRedeliver(row, executor, now, retryIdleMs, lastActive, heartbeatCooldownMs)) {
           const key = String(row.id)
           const last = lastHeartbeat.get(key) ?? 0
           if (now - last >= retryIdleMs) {
@@ -388,7 +487,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
                 `${fresh.content}\n\n[检测到任务中断,已重新投递,请继续执行并调用 report_task。]`,
                 'retry')
               await ledger.recordDelivery(fresh.id, message.id)
-              deliverTask(worker, message, 'followup')
+              deliverTask(worker, message, 'steer')
             })()
           }
         }

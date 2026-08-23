@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
+import { isTerminal } from './ledger.ts'
 import type { TaskRecord } from './types.ts'
 
 /** Why an operation was refused. */
@@ -30,6 +31,8 @@ export type DenialReason =
   | 'target-archived'
   | 'self-delivery'
   | 'not-dispatcher'
+  | 'not-executor'
+  | 'not-task-party'
   | 'task-not-found'
 
 /** A refusal carrying the reason and a model-facing explanation. */
@@ -194,6 +197,81 @@ export function authorizeSettlement(
     )
   }
   return undefined
+}
+
+/**
+ * Authorize a claim on a submitted task.
+ *
+ * Claim authority belongs to the recorded executor (`assignedTo`) alone — the
+ * same durable relationship that lets the executor report. A worker that is
+ * not the assigned executor cannot pull a task it was never given, and the
+ * initiator cannot claim a task it dispatched (reassign is the initiator's
+ * lever). This is the worker-side counterpart of {@link authorizeSettlement}.
+ *
+ * @param task - the ledger row to claim, or `undefined` when the id is unknown.
+ * @param callerId - the session claiming execution.
+ * @returns `undefined` when authorized, otherwise the refusal.
+ */
+export function authorizeClaim(
+  task: TaskRecord | undefined,
+  callerId: SessionId,
+): Denial | undefined {
+  if (task === undefined) {
+    return deny('task-not-found', 'no such task in this ledger')
+  }
+  if (task.assignedTo !== callerId) {
+    return deny(
+      'not-executor',
+      `该任务不属于你:task "${task.id}" is assigned to another session`,
+    )
+  }
+  return undefined
+}
+
+/**
+ * Whether a session is one of a task's participants: the dispatcher
+ * (`assignedBy`), the executor (`assignedTo`), or the reviewer
+ * (`assignedReviewer`, defaulting to the dispatcher when unnamed).
+ *
+ * @param task - the ledger row.
+ * @param callerId - the session to test.
+ * @returns `true` when the session holds one of the three durable roles.
+ */
+export function isTaskParty(task: TaskRecord, callerId: SessionId): boolean {
+  return task.assignedBy === callerId
+    || task.assignedTo === callerId
+    || task.assignedReviewer === callerId
+}
+
+/**
+ * Authorize reading a task.
+ *
+ * A LIVE task (queued / submitted / working / input-required / auth-required)
+ * is owned by its participants alone — content, feedback, and questions must
+ * not leak to same-workspace bystanders that were never part of the job.
+ * Completed and terminally-failed tasks are history and public, so a reviewer
+ * or a future audit can still read the record.
+ *
+ * @param task - the ledger row to read, or `undefined` when the id is unknown.
+ * @param callerId - the session requesting the read.
+ * @returns `undefined` when authorized, otherwise the refusal.
+ */
+export function authorizeTaskRead(
+  task: TaskRecord | undefined,
+  callerId: SessionId,
+): Denial | undefined {
+  if (task === undefined) {
+    return deny('task-not-found', 'no such task in this ledger')
+  }
+  // History is public: completed (settled or awaiting its verdict) and
+  // terminally-failed (failed / canceled / rejected, the immediately-archived
+  // set) tasks are readable by anyone.
+  if (task.status === 'completed' || isTerminal(task.status)) return undefined
+  if (isTaskParty(task, callerId)) return undefined
+  return deny(
+    'not-task-party',
+    `该任务与你无关:task "${task.id}" belongs to other sessions`,
+  )
 }
 
 /**

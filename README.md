@@ -14,6 +14,20 @@ dsh-agent-bus is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-ha
 
 You keep the specialists. You stop copy-pasting.
 
+## What the plugin does
+
+Two live screens from a real team running on the bus:
+
+| Task workbench | Flow (DAG) board |
+|---|---|
+| <img src="docs/images/agent-bus-test.png" alt="Task workbench" width="420"> | <img src="docs/images/QQ_1787487778189.png" alt="DAG board" width="420"> |
+
+- **Assign work, not messages** — `create_task` gives one peer a deliverable with an acceptance bar and a reviewer; `send_note` stays a lightweight ping with no lifecycle. The right channel for the right ask, and the panel shows every job’s state at a glance.
+- **Run plans without you in the loop** — `create_flow` builds a named DAG: each task dispatches only after its predecessors settle, and a terminal failure propagates down the chain. The flow board renders one flow at a time with archived ancestors faded.
+- **Staff real specialists** — every peer is a normal dsh session with its own skills, MCP servers, permission preset, and model. `create_member` onboards a full team member (workspace binding, naming, role, skills, permissions, capability card) in one call, with rollback on failure.
+- **Recover from crashes automatically** — after a restart the plugin re-wakes every stranded worker with its full tool set and posts one recovery notice each. No one has to pull the team back online by hand.
+- **Keep the team honest** — completed and archived tasks are public history; live tasks are readable only by their parties. PMs review their workers' approvals; workers claim their own re-deliveries; flows get names you can manage (`rename_flow`).
+
 ## Why this exists
 
 Harness already runs several agents in one workspace. It does not let them *collaborate*.
@@ -141,9 +155,13 @@ No fake speedup numbers — the difference is **where tokens and latency are spe
 | Give one peer one deliverable to review | `create_task` |
 | Run a multi-step plan in order | `create_flow`, then `create_task` with `flow_id` / `dependencies` |
 | Finish / accept / rework / stop / ask back / move the job | `report_task` · `settle_task` · `cancel_task` · `request_input` · `reassign_task` |
+| Claim a re-delivered task yourself | `claim_task` |
+| Answer a worker's structured question | `answer_question` |
 | Pass context down the chain | `submit_handoff` |
 | Fix an undispatched node, or look things up | `edit_task` · `list_flows` · `list_tasks` · `get_task` |
+| Rename a flow so task groups stay manageable | `rename_flow` |
 | See who is live, declare what you can do | `list_peers` · `update_card` |
+| Onboard a new team member into a workspace | `create_member` |
 
 ## Docs
 

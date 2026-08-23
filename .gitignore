@@ -3,6 +3,19 @@ lib/
 *.log
 .DS_Store
 
-# 本地测试资产,不推送
-# (e2e 依赖本机 dsh 会话与路径;vitest 单测在本地工作区运行)
-tests/
+# 本地 e2e 资产,不推送
+# (e2e 依赖本机 dsh 会话与路径;vitest 单测 *.spec.ts 需要入库供 CI 运行)
+tests/e2e/
+
+# --- 密钥与本地环境,永不入库 ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.*
+credentials.*
+**/id_rsa
+**/id_ed25519

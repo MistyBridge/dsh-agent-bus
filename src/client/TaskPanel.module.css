@@ -697,6 +697,27 @@ html[data-agent-bus-panel-open] .abPPreview {
   color: var(--dsw-alias-label-tertiary);
 }
 
+.abPFlowText {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.abPFlowText .abPFlowName {
+  flex: none;
+}
+
+.abPFlowDesc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .abPFlowCount {
   flex: none;
   min-width: 20px;
@@ -1339,4 +1360,69 @@ html[data-agent-bus-panel-open] .abPPreview {
     transition: none;
     animation: none;
   }
+}
+
+/* Decision-7 stale-hint styles (kept in lockstep with PANEL_STALE_CSS). */
+.abPStaleBadge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-warn-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.abPStale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 50%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.abPStaleText {
+  flex: 1;
+}
+
+.abPStaleClose {
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+
+.abPStaleClose:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.abPRecovery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-border-l2));
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.abPRecoveryText {
+  flex: 1;
 }

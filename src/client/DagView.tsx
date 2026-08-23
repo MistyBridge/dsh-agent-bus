@@ -611,7 +611,12 @@ export function DagView({
               data-active={selectedFlowId === flow.id || undefined}
               onClick={() => onSelectFlow(flow.id)}
             >
-              <span className="abPFlowName">{flow.name}</span>
+              <span className="abPFlowText">
+                <span className="abPFlowName">{flow.name}</span>
+                {flow.description !== null && flow.description !== '' && (
+                  <span className="abPFlowDesc" title={flow.description}>{flow.description}</span>
+                )}
+              </span>
               <span className="abPFlowCount">{flow.unsettledCount}</span>
             </button>
           ))}
@@ -629,7 +634,13 @@ export function DagView({
                   data-archived
                   onClick={() => onSelectFlow(flow.id)}
                 >
-                  <span className="abPFlowName">{flow.name}</span>
+                  <span className="abPFlowText">
+                    <span className="abPFlowName">{flow.name}</span>
+                    {flow.description !== null && flow.description !== '' && (
+                      <span className="abPFlowDesc" title={flow.description}>{flow.description}</span>
+                    )}
+                  </span>
+                  <span className="abPFlowCount">{flow.taskCount}</span>
                 </button>
               ))}
             </div>

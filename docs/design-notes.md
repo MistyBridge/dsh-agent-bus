@@ -58,6 +58,23 @@
 
 ## 已实现
 
+**2026-08-23(决策 8:流程命名管理)**
+- create_flow 同工作区重名拒绝:检查放在 ledger.createFlow 的 enqueue 内(串行写入链,并发安全),报错含「该工作区已有同名流程『xxx』」并列出已有流程名。
+- 无意义名(纯数字/纯符号,无任何字母字符)放行但返回 `suggestion` 字段:「建议格式:目标 + 阶段,如『电商站上线:Phase 1 基建』」(create_flow output schema 增加可选 suggestion)。
+- `rename_flow(flow_id, name, description?)` 工具(checkedTool):仅创建者(createdBy)可改,他人报错「仅流程创建者可改名」;重名拒绝同上(ledger.renameFlow,新 FlowResult 返回类型);description 传值替换、空串清除、缺省保留。
+- DAG 侧栏流程项显示 name + description(单行截断,悬停 title 全文)+ 任务数;archived 项补 taskCount 徽标。FlowView 的 description 投影(panel.ts / panel-model.ts)本已存在,仅渲染层补齐。
+
+**2026-08-23(决策 4:严格鉴权——非终态任务仅任务相关者可访问)**
+- `authorize.ts` 新增 `isTaskParty`(assignedBy/assignedTo/assignedReviewer 三角色)与 `authorizeTaskRead`(DenialReason 新增 `not-task-party`):live 任务(queued/submitted/working/input-required/auth-required)仅相关者可读;completed 与终态(failed/canceled/rejected,即立即归档集合)为历史、公开可读;非相关者报错「该任务与你无关」。
+- `tools.ts` 的 `canReadTask` 收紧为同一规则(签名去掉 callerWorkspace——工作区成员身份不再授予读权),`get_task` 改用 `authorizeTaskRead`;list_tasks 本就按 assignedTo(收件箱)/assignedBy(发件箱)过滤、天然相关者限定,无需改动;其余操作类工具(report/settle/cancel/request_input/claim/edit/reassign/handoff/answer)均已按对应角色鉴权,无泄露路径。
+
+**2026-08-23(决策 2:claim_task 主动领取 + 心跳重投活跃态冷却)**
+- `claim_task(taskId)` 工具:执行方(assignedTo)可把 submitted 任务领回 working(复用 ledger 既有转移 submitted→working);鉴权走 `authorizeClaim`(非执行方报错「该任务不属于你」);已 working 且本人领取为幂等 no-op;非 submitted/working 状态报错。ToolsDeps 新增 `noteActivity` 记录执行者活跃信号。
+- 心跳重投冷却绑定执行者活跃态:index.ts 维护 `sessionId → 最后活动时间` 映射,在 turn/end、agent/inbox/claimed、claim_task/report_task/request_input 时刷新;心跳重投前用 `shouldHeartbeatRedeliver`(scheduler.ts 纯函数)判定——执行者在 `heartbeatCooldownMs`(新配置,缺省 = retryIdleMs)内有活动则不重投,封死「重投刷新 updatedAt → 又触发重投」的 T5 循环。
+
+**2026-08-23(决策 1:工具输出 schema 自动检查)**
+- `checkedTool` 包装器(`src/checked-tool.ts`)包住全部工具的 `defineTool`:`execute` 返回先用 harness 同一把尺子 `validateJsonSchemaValue` 校验,不一致即抛 `ToolOutputMismatchError`——消息含字段名(缺失/多余/类型不符)、返回面与说明书的最小差异、修复方向(新增字段附建议声明,如 `title: { "type": "string" }`),并提示「工具返回面与说明书不一致」。schema 漂移从「harness 裸拒绝、不可读」变成工具内可读报错,不再静默失效。
+
 **2026-08-17(端到端验证)**
 - 事件驱动迁移:`agent/inbox/claimed` / `agent/inbox/discarded` → 台账转移。无标签的根上下文监听器被 scope 过滤器全局准入(`scopeTarget` 的 `tag === undefined → return true`),无需 per-agent 注册。
 - 投递竞态修复:`followup()` 对空闲接收者同 tick 认领,先写 messageId 再投递(delivery.ts 拆分 build/deliver)。

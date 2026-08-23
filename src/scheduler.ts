@@ -12,18 +12,42 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-session'
-import { buildTaskMessage, deliverTask } from './delivery.ts'
+import { buildTaskMessage, deliverTask, notifySession } from './delivery.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
-import type { TaskId } from './types.ts'
+import type { TaskId, TaskRecord } from './types.ts'
 import { wakeSession } from './wake.ts'
 
-/** Deliver one notice to a live session (the scheduler's only notification). */
-function notifySession(ctx: Context, sessionId: SessionId, taskId: TaskId, text: string): void {
-  const session = ctx.agents.get(sessionId)
-  if (session === undefined) return
-  const notice = buildTaskMessage(sessionId, taskId, text, 'scheduler')
-  deliverTask(session, notice, 'followup')
+/**
+ * Whether the stranded-recovery heartbeat may re-deliver one task.
+ *
+ * The heartbeat re-delivers a working/submitted task whose LIVE executor sits
+ * idle past the retry window — but only when the executor has NOT been active
+ * recently. Activity (a turn ending, a claim, a report) means the worker is on
+ * the task, so re-delivering would only pile up another delivery and refresh
+ * the row's `updatedAt`, re-arming the very window that kicked it (the T5
+ * loop). The cooldown is bound to the EXECUTOR's activity, never to the row's
+ * own timestamp.
+ *
+ * @param row - the task row under heartbeat consideration.
+ * @param executor - the live executor, or `undefined` when offline.
+ * @param now - current epoch milliseconds.
+ * @param retryIdleMs - how stale the row must be before a re-delivery is due.
+ * @param lastActivityAt - the executor's last recorded activity, if any.
+ * @param cooldownMs - how recent activity must be to suppress the heartbeat.
+ * @returns `true` when the heartbeat may re-deliver this task.
+ */
+export function shouldHeartbeatRedeliver(
+  row: TaskRecord,
+  executor: { status: string } | undefined,
+  now: number,
+  retryIdleMs: number,
+  lastActivityAt: number | undefined,
+  cooldownMs: number,
+): boolean {
+  if (executor === undefined || executor.status !== 'idle') return false
+  if (now - Date.parse(row.updatedAt) < retryIdleMs) return false
+  if (lastActivityAt !== undefined && now - lastActivityAt < cooldownMs) return false
+  return true
 }
 
 /**
@@ -67,6 +91,7 @@ export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId):
     task.assignedBy,
     task.id,
     `任务 ${task.id} 的前置依赖已全部结算,已自动派发,状态「待执行」,等待执行方认领。`,
+    'scheduler',
   )
 }
 
@@ -109,4 +134,51 @@ export async function dispatchReadyTasks(ctx: Context, ledger: TaskLedger): Prom
     await dispatchOne(ctx, ledger, task.id)
   }
   return ready.length
+}
+
+/**
+ * Startup recovery (decision 10 B): re-wake the executors of tasks that a
+ * process restart left stranded, so a crash needs no human to pull workers
+ * back online.
+ *
+ * A restart drops every agent back to dormant. Tasks in `working`,
+ * `submitted`, or `input-required` have a live-context promise behind them
+ * (a claimed message, a paused question) — their executor must be woken and
+ * reminded to continue, exactly as the PM would by hand. Waking restores the
+ * full tool set through {@link wakeSession} (which now carries the session's
+ * recorded preset setup), so the worker resumes with its file/shell tools
+ * intact.
+ *
+ * Idempotent: a task whose executor is already live is skipped (it is
+ * genuinely working, not stranded), and the reminder is delivered once per
+ * wake. Dormant executors that cannot be woken stay as-is; the existing
+ * offline-grace / timeout sweeps remain the backstop.
+ *
+ * @param ctx - plugin context.
+ * @param ledger - the task ledger.
+ * @returns how many workers were woken.
+ */
+export async function resumeStrandedTasks(ctx: Context, ledger: TaskLedger): Promise<number> {
+  const stranded = ledger.listAll().filter(task =>
+    task.assignedTo !== undefined
+    && (task.status === 'working' || task.status === 'submitted' || task.status === 'input-required'))
+  const woken = new Set<string>()
+  for (const task of stranded) {
+    const executor = task.assignedTo
+    if (executor === undefined) continue
+    if (ctx.agents.get(executor) !== undefined) continue // live executor: not stranded
+    const worker = await wakeSession(ctx, executor)
+    if (worker === undefined) continue // unwakeable: offline grace / timeout will decide
+    if (woken.has(String(executor))) continue // one reminder per worker
+    woken.add(String(executor))
+    const message = buildTaskMessage(
+      task.assignedBy,
+      task.id,
+      `[系统恢复通知] dsh 服务曾重启,你的会话已自动恢复。你正在执行的任务 ${task.id} 仍处于「${task.status}」,`
+        + `请继续完成并调用 report_task 提交结果;若中断位置已丢失,可重新读取任务要求继续。`,
+      'scheduler',
+    )
+    deliverTask(worker, message, 'followup')
+  }
+  return woken.size
 }

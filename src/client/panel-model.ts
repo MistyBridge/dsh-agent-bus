@@ -141,6 +141,20 @@ export interface PanelSnapshot {
   readonly tasks: readonly TaskView[]
   readonly flows: readonly FlowView[]
   readonly stats: StatsView
+  /**
+   * Whether the running host instance predates the latest build (decision 7).
+   * Optional: hosts built before this field are treated as current.
+   */
+  readonly instanceStale?: boolean
+  /** Explanation for a stale instance; absent when current. */
+  readonly staleMessage?: string | null
+  /**
+   * How many stranded workers this boot re-woke (decision 10 C). Optional:
+   * hosts built before this field report nothing.
+   */
+  readonly recoveredWorkers?: number
+  /** Timestamp (epoch ms) of the last startup recovery; absent when none. */
+  readonly recoveryAt?: number | null
 }
 
 /** Color tone for a status dot / badge. */
@@ -573,6 +587,10 @@ const EMPTY_SNAPSHOT: PanelSnapshot = {
   tasks: [],
   flows: [],
   stats: EMPTY_STATS,
+  instanceStale: false,
+  staleMessage: null,
+  recoveredWorkers: 0,
+  recoveryAt: null,
 }
 
 /** Empty snapshot used before the first successful poll (and on hard failure). */

@@ -44,6 +44,23 @@ export const capability = z.object({
   label: z.string().min(1).max(50),
 })
 
+/** One structured question option at the durable boundary. */
+export const pendingQuestionOption = z.object({
+  label: z.string().min(1),
+  description: z.string().optional(),
+}).strict()
+
+/** One structured question at the durable boundary (decision 9): serialized
+ * from the official `ask_user_question` tool's questions argument while the
+ * task awaits the initiator's answer. */
+export const pendingQuestion = z.object({
+  id: z.string().min(1),
+  question: z.string().min(1),
+  header: z.string().optional(),
+  options: z.array(pendingQuestionOption),
+  multiSelect: z.boolean(),
+}).strict()
+
 /**
  * Durable shape of one task row. Optional fields are absent until the
  * lifecycle reaches the state that produces them.
@@ -74,6 +91,7 @@ export const taskRecord = z.object({
   report: z.string().optional(),
   reportRef: z.string().optional(),
   question: z.string().optional(),
+  pendingQuestions: z.array(pendingQuestion).optional(),
   outcome: z.enum(['success', 'failure']).optional(),
   feedback: z.string().optional(),
   reason: z.string().optional(),

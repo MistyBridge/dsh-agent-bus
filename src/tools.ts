@@ -1,5 +1,5 @@
 /**
- * The model-facing tool surface: nine tools over the ledger and the delivery
+ * The model-facing tool surface: fifteen tools over the ledger and the delivery
  * path, named after the A2A operation set where one exists.
  *
  * The surface stays deliberately small. The reference implementation this
@@ -17,17 +17,33 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import { defineTool } from '@deepseek-ai/dsh-tools'
 import { assertNever } from '@deepseek-ai/dsh-llm'
+import { APPROVAL_POLICIES } from '@deepseek-ai/dsh-user-approval'
+import { SANDBOX_MODES } from '@deepseek-ai/dsh-sandbox-policy'
+import { checkedTool } from './checked-tool.ts'
+import {
+  onboardMember,
+  parseCreateMemberInput,
+  type CreateMemberHost,
+  type PermissionPresetHost,
+  type PresetMountHost,
+} from './create-member.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { authorizeNoteRecipient, authorizePeerOrDormant, authorizeSettlement, resolveWorkspacePath } from './authorize.ts'
-import { admitContent, buildMessageMessage, buildTaskMessage, deliverTask, type DeliverySource } from './delivery.ts'
+import { authorizeClaim, authorizeNoteRecipient, authorizePeerOrDormant, authorizeSettlement, authorizeTaskRead, resolveWorkspacePath } from './authorize.ts'
+import {
+  admitContent,
+  buildMessageMessage,
+  buildTaskMessage,
+  deliverTask,
+  notifySession,
+} from './delivery.ts'
 import type { ReportStore } from './external.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
 import { isTokenBuckets, staffRoles } from './panel.ts'
+import { normalizeQuestionAnswers, type QuestionRegistry } from './question-bridge.ts'
 import { DispatchRateLimiter } from './rate-limit.ts'
 import { dispatchOne } from './scheduler.ts'
 import { wakeSession } from './wake.ts'
@@ -52,6 +68,14 @@ export interface ToolsDeps {
   /** Separate sliding window for send_note, so chatter cannot exhaust task quota. */
   readonly messageLimiter: DispatchRateLimiter
   readonly reports: ReportStore
+  /** Pending question asks shared with the question bridge (decision 9). */
+  readonly questions: QuestionRegistry
+  /**
+   * Record one executor-activity signal for the stranded-recovery heartbeat
+   * cooldown (decision 2): the owning plugin keeps the `sessionId → last
+   * activity` map; tools that prove the worker is on the task call this.
+   */
+  readonly noteActivity: (sessionId: SessionId) => void
 }
 
 /** Model-facing projection of one ledger row for listings. */
@@ -205,26 +229,19 @@ function detailView(task: TaskRecord): TaskDetailView {
 /**
  * Decide whether one session may read a task.
  *
- * The workspace is the trust boundary, matching the harness's own
- * cross-session authorization (tool-session-query's cwd predicate):
- * participants always pass, and any other session sharing the task's
- * workspace does too. Task ids can reach non-participants through relayed
- * messages and future visibility surfaces, so the read gate stays even where
- * ids are undiscoverable today.
+ * Decision 4: a LIVE task (queued / submitted / working / input-required /
+ * auth-required) is readable by its participants — dispatcher, executor,
+ * reviewer — alone; workspace membership no longer grants read access.
+ * Completed and terminally-failed tasks are history and public. Task ids can
+ * reach non-participants through relayed messages and future visibility
+ * surfaces, so the gate stays even where ids are undiscoverable today.
  *
  * @param task - the row being read.
  * @param callerId - the session requesting the read.
- * @param callerWorkspace - the caller's resolved workspace path, if any.
  * @returns `true` when the read is authorized.
  */
-export function canReadTask(
-  task: TaskRecord,
-  callerId: SessionId,
-  callerWorkspace: string | undefined,
-): boolean {
-  return task.assignedBy === callerId
-    || task.assignedTo === callerId
-    || (callerWorkspace !== undefined && callerWorkspace === task.workspacePath)
+export function canReadTask(task: TaskRecord, callerId: SessionId): boolean {
+  return authorizeTaskRead(task, callerId) === undefined
 }
 
 /**
@@ -325,65 +342,10 @@ function snapshotTokensAtDispatch(
 }
 
 /**
- * Per-task notice aggregator: several notices for the SAME task within one
- * short window (settle receipt + scheduler dispatch land together) are
- * merged into a single long message instead of N queued followups. The
- * inbox then carries one turn per task instead of a pile-up, which was the
- * PM's "notification bombing" pain. The window is short (3s) so a notice is
- * never meaningfully delayed; a missing flush on shutdown only drops a
- * duplicate-ish notice, never ledger state.
- */
-const NOTICE_MERGE_MS = 3_000
-
-class NoticeMerger {
-  private readonly pending = new Map<string, {
-    timer: ReturnType<typeof setTimeout>
-    texts: string[]
-    sessionId: SessionId
-    taskId: TaskId
-    tool: DeliverySource
-  }>()
-
-  push(ctx: Context, sessionId: SessionId, taskId: TaskId, text: string, tool: DeliverySource): void {
-    const key = String(taskId)
-    const existing = this.pending.get(key)
-    if (existing !== undefined) {
-      existing.texts.push(text)
-      return
-    }
-    const entry = { texts: [text], sessionId, taskId, tool }
-    const timer = setTimeout(() => this.flush(ctx, key), NOTICE_MERGE_MS)
-    timer.unref?.()
-    this.pending.set(key, { ...entry, timer })
-  }
-
-  private flush(ctx: Context, key: string): void {
-    const entry = this.pending.get(key)
-    this.pending.delete(key)
-    if (entry === undefined) return
-    const session = ctx.agents.get(entry.sessionId)
-    if (session === undefined) return
-    const body = entry.texts.join('\n')
-    const notice = buildTaskMessage(entry.sessionId, entry.taskId, body, entry.tool)
-    deliverTask(session, notice, 'followup')
-  }
-}
-
-const noticeMerger = new NoticeMerger()
-
-export function notifySession(
-  ctx: Context,
-  sessionId: SessionId,
-  taskId: TaskId,
-  text: string,
-  tool: DeliverySource = 'create_task',
-): void {
-  if (ctx.agents.get(sessionId) === undefined) return
-  noticeMerger.push(ctx, sessionId, taskId, text, tool)
-}
-
-/**
- * Register the nine agent-bus tools.
+ * Register the fifteen agent-bus tools, each behind the output-schema gate
+ * (`checkedTool`): an execute return that drifts from its declared
+ * `output.schema` fails inside the tool with a structured, readable error
+ * instead of the harness's bare rejection.
  *
  * @param ctx - context carrying the tool registry and live Agent registry.
  * @param config - resolved tunables.
@@ -392,7 +354,7 @@ export function notifySession(
 export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: ToolsDeps): void {
   const { ledger, workspaces, limiter } = deps
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'list_peers',
     description:
       'List the other live agent sessions in your workspace, which are the only valid targets for '
@@ -485,7 +447,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     // Named send_note, NOT send_message: the harness bundle reserves
     // send_message globally for subagent conversation (dsh-tool-subagent-
     // control), so the peer channel must not collide with it.
@@ -568,7 +530,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'create_flow',
     description:
       'LARGE scope: create a flow — the roadmap container for a multi-step effort. FIRST write out '
@@ -590,11 +552,13 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
         properties: {
           flowId: { type: 'string', required: true },
           name: { type: 'string', required: true },
+          suggestion: { type: 'string' },
         },
       },
       render: (_args, result) => [{
         type: 'text',
-        text: `flow ${result.flowId} created: ${result.name}`,
+        text: `flow ${result.flowId} created: ${result.name}`
+          + (result.suggestion !== undefined ? `\n${result.suggestion}` : ''),
       }],
     },
     presentCall: (args) => ({ card: 'generic', title: 'agent-bus:创建流程', kind: 'other', rawInput: { name: args.name } }),
@@ -620,11 +584,78 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
         flowId, name, description?.ok === true ? description.content : undefined,
         callerId, workspacePath,
       )
-      return { flowId: flow.id, name: flow.name }
+      // Decision 8: a meaningless name (no letter in any script — pure digits
+      // or symbols) is allowed, but the model gets a naming suggestion.
+      const suggestion = /\p{L}/u.test(name)
+        ? undefined
+        : '建议格式:目标 + 阶段,如『电商站上线:Phase 1 基建』'
+      return {
+        flowId: flow.id,
+        name: flow.name,
+        ...(suggestion !== undefined ? { suggestion } : {}),
+      }
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
+    name: 'rename_flow',
+    description:
+      'Rename a flow you created, optionally replacing its description. The new name must be '
+      + 'unique within the workspace — renaming onto an existing flow\'s name is refused with the '
+      + 'existing names listed. Pass description to replace it, an empty string to clear it, or '
+      + 'omit it to keep the current note. Only the session that created the flow may rename it.',
+    parameters: {
+      flow_id: { type: 'string', required: true, description: 'The flow id to rename.' },
+      name: { type: 'string', required: true, description: 'New flow display name, 1–80 characters.' },
+      description: { type: 'string', description: 'Replacement note; empty clears it, omit keeps it.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          flowId: { type: 'string', required: true },
+          name: { type: 'string', required: true },
+          description: { type: 'string' },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `flow ${result.flowId} renamed to ${result.name}`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:重命名流程', kind: 'other', rawInput: { flow_id: args.flow_id, name: args.name } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:重命名流程', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'rename_flow')
+      const name = String(args.name ?? '').trim()
+      if (name.length === 0 || name.length > 80) {
+        throw new Error('flow name must be 1–80 characters')
+      }
+      const flow = ledger.getFlow(args.flow_id)
+      if (flow === undefined) throw new Error(`no such flow "${args.flow_id}"`)
+      if (flow.createdBy !== callerId) {
+        throw new Error(`仅流程创建者可改名:flow "${flow.id}" was created by another session`)
+      }
+      const description = args.description !== undefined
+        ? admitContent(String(args.description), 400)
+        : undefined
+      if (description !== undefined && !description.ok) throw new Error(description.message)
+      const renamed = await ledger.renameFlow(
+        flow.id,
+        name,
+        description?.ok === true ? description.content : undefined,
+      )
+      if (!renamed.ok) throw new Error(renamed.message)
+      return {
+        flowId: renamed.flow.id,
+        name: renamed.flow.name,
+        ...(renamed.flow.description !== undefined ? { description: renamed.flow.description } : {}),
+      }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
     name: 'reassign_task',
     description:
       'As the initiator, reassign an unsettled task without recreating it: move the executor '
@@ -724,7 +755,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
         const worker = await wakeSession(ctx, newExecutor)
         if (worker !== undefined) {
           await ledger.recordDelivery(taskId, message.id)
-          deliverTask(worker, message, 'followup')
+          deliverTask(worker, message, 'steer')
         } else {
           await ledger.transition(taskId, 'queued')
         }
@@ -755,7 +786,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'submit_handoff',
     description:
       'As the executor of a settled task, deliver the handoff document to ONE task that depends on '
@@ -813,7 +844,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'list_flows',
     description:
       'List the flows in your workspace: each flow\'s name, task counts, and whether it is archived '
@@ -872,7 +903,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'create_task',
     description:
       'MEDIUM scope: create one task node for a live peer in your workspace — a single deliverable '
@@ -885,8 +916,9 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       + 'acceptance_criteria is the minimum requirement the reviewer settles against. A rejected '
       + 'result sends the SAME task back to the worker for rework — the task id never changes across '
       + 'attempts. To answer a peer\'s request_input, pass task_id — your message becomes the answer '
-      + 'and the task resumes. Use mode=steer only when the news invalidates what the peer is doing '
-      + 'right now. For a multi-step effort, use create_flow instead and build the DAG.',
+      + 'and the task resumes. Delivery defaults to steer, which puts the task ahead of any queued '
+      + 'notes (priority channel); pass mode=followup to queue FIFO behind everything already pending. '
+      + 'For a multi-step effort, use create_flow instead and build the DAG.',
     parameters: {
       target: { type: 'string', required: true, description: 'Session id of the peer, from list_peers.' },
       content: { type: 'string', required: true, description: 'The task instruction or answer.' },
@@ -894,7 +926,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       mode: {
         type: 'string',
         enum: ['followup', 'steer'],
-        description: 'followup (default) queues the task; steer interrupts the peer\'s current step.',
+        description: 'steer (default) delivers with priority ahead of queued notes; followup queues FIFO behind them.',
       },
       reviewer: {
         type: 'string',
@@ -964,10 +996,18 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       const title = admitContent(String(args.title ?? ''), 80)
       if (!title.ok) throw new Error(title.message)
 
-      const mode: DeliveryMode = args.mode === 'steer' ? 'steer' : 'followup'
+      // Priority delivery: the default 'steer' channel (next-step) is claimed
+      // before any queued next-turn messages at every boundary, so a
+      // dispatched task never waits behind a pile of send_note turns. An
+      // explicit 'followup' opts into FIFO queueing behind everything already
+      // pending.
+      const mode: DeliveryMode = args.mode === 'followup' ? 'followup' : 'steer'
 
       // Answer path: the initiator replies to a worker's request_input. The
-      // answer is a new delivery; the task resumes working when it is claimed.
+      // answer is a new delivery; the task transitions back to working HERE
+      // rather than waiting for an inbox-claimed event — a steer-spliced
+      // answer may enter the worker's current turn without a claim boundary,
+      // which would otherwise leave the row stuck in input-required forever.
       if (args.task_id !== undefined) {
         const taskId = TaskId(args.task_id)
         const task = ledger.get(taskId)
@@ -979,12 +1019,14 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
           throw new Error(`only the dispatching session may answer task "${taskId}"`)
         }
         const message = buildTaskMessage(callerId, taskId, admitted.content)
+        const resumed = await ledger.transition(taskId, 'working')
+        if (!resumed.ok) throw new Error(resumed.message)
         await ledger.recordDelivery(taskId, message.id)
         deliverTask(decision.target, message, mode)
         const pending = ledger.listFor(targetId).filter(
           row => row.status === 'submitted' || row.status === 'working' || row.status === 'input-required',
         )
-        return { taskId: String(taskId), status: 'input-required', queuePosition: pending.length, blockedBy: [] as string[] }
+        return { taskId: String(taskId), status: resumed.task.status, queuePosition: pending.length, blockedBy: [] as string[] }
       }
 
       // Create path: a fresh task node. Reviewer defaults to the initiator.
@@ -1062,7 +1104,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'edit_task',
     description:
       'Edit a task you created that has not been dispatched yet: rewrite its requirement text, its '
@@ -1168,7 +1210,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'list_tasks',
     description:
       'List the ACTIVE tasks in the ledger. Scope inbox (default) shows work addressed to you, in the '
@@ -1205,6 +1247,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
             from: { type: 'string', required: true },
             to: { type: 'string' },
             content: { type: 'string', required: true },
+            title: { type: 'string' },
             report: { type: 'string' },
             outcome: { type: 'string' },
             reason: { type: 'string' },
@@ -1246,12 +1289,13 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'get_task',
     description:
       'Read one task\'s full record: the complete task content and submitted result, without the '
-      + 'truncation list_tasks applies. The dispatching session, the assigned session, and any other '
-      + 'session in the same workspace may read a task. Use it to review a long report before settling.',
+      + 'truncation list_tasks applies. A live task is readable only by its participants (the '
+      + 'dispatching session, the assigned session, and the reviewer); completed or terminally-failed '
+      + 'tasks are history and publicly readable. Use it to review a long report before settling.',
     parameters: {
       task_id: { type: 'string', required: true, description: 'The ledger task id.' },
     },
@@ -1265,6 +1309,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
           from: { type: 'string', required: true },
           to: { type: 'string' },
           content: { type: 'string', required: true },
+          title: { type: 'string' },
           acceptanceCriteria: { type: 'string' },
           handoffs: {
             type: 'array',
@@ -1300,10 +1345,11 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       if (task === undefined) throw new Error(`no such task "${taskId}"`)
       const caller = ctx.agents.get(callerId)
       if (caller === undefined) throw new Error('get_task: the calling session is not a live agent')
-      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
-      if (!canReadTask(task, callerId, callerWorkspace)) {
-        throw new Error(`session "${callerId}" is outside task "${taskId}"'s workspace`)
-      }
+      // Decision 4: a live task is readable by its participants alone; a
+      // non-participant gets "该任务与你无关" with no content. Completed and
+      // terminally-failed tasks are history and public.
+      const denial = authorizeTaskRead(task, callerId)
+      if (denial !== undefined) throw new Error(denial.message)
       // Externalized reports are read back so the reviewer sees the full
       // result; a missing file degrades to the inline summary.
       let fullReport: string | undefined
@@ -1316,7 +1362,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'report_task',
     description:
       'As the worker, submit the result of a task assigned to you: a working task becomes completed '
@@ -1357,6 +1403,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       if (task.status === 'canceled') {
         const attached = await ledger.attachReport(taskId, admitted.content)
         if (!attached.ok) throw new Error(attached.message)
+        deps.noteActivity(callerId)
         return { taskId, status: attached.task.status }
       }
       // Long reports are externalized: the ledger row carries a bounded
@@ -1380,11 +1427,12 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       notifySession(ctx, reviewer, taskId,
         `任务 ${taskId} 已完成,当前状态为「待验收」,请调用 settle_task 验收。提交结果摘要:${excerpt}`,
         'report_task')
+      deps.noteActivity(callerId)
       return { taskId, status: completed.task.status }
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'settle_task',
     description:
       'As the reviewer, settle a completed task: outcome=success accepts it and the task is done; '
@@ -1483,13 +1531,13 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
         const recorded = await ledger.recordDelivery(taskId, reworkNotice.id)
         if (!recorded.ok) throw new Error(recorded.message)
         const worker = ctx.agents.get(task.assignedTo)
-        if (worker !== undefined) deliverTask(worker, reworkNotice, 'followup')
+        if (worker !== undefined) deliverTask(worker, reworkNotice, 'steer')
       }
       return { taskId, status: settled.task.status, outcome }
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'cancel_task',
     description:
       'As the dispatcher, cancel a task you dispatched while it is queued(待投递), submitted, '
@@ -1551,13 +1599,13 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
         const note = `任务 ${taskId} 状态「已取消」,由派发方取消${reason?.ok === true ? `(${reason.content})` : ''}。`
           + '请用 report_task 提交你已完成部分的摘要。'
         const summary = buildTaskMessage(callerId, taskId, note, 'cancel_task')
-        deliverTask(worker, summary, 'followup')
+        deliverTask(worker, summary, 'steer')
       }
       return { taskId, status: canceled.task.status }
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'request_input',
     description:
       'As the worker, pause a task you are working on because you need information only the '
@@ -1596,11 +1644,12 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       if (!admitted.ok) throw new Error(admitted.message)
       const paused = await ledger.transition(taskId, 'input-required', { question: admitted.content })
       if (!paused.ok) throw new Error(paused.message)
+      deps.noteActivity(callerId)
       return { taskId, status: paused.task.status }
     },
   }))
 
-  ctx.tools.register(defineTool({
+  ctx.tools.register(checkedTool({
     name: 'update_card',
     description:
       'Maintain your own capability card, which list_peers shows to the workspace. description is '
@@ -1679,6 +1728,222 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       // The durable record carries updatedAt; the tool result is the
       // model-facing projection, which must match the declared output schema.
       return { description, capabilities }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'answer_question',
+    description:
+      'Answer a structured question the worker asked via the dsh ask_user_question tool while executing '
+      + 'YOUR task: the task paused as input-required and the question (with its options) was forwarded to '
+      + 'you. Provide one answer item per pending question — the question id, the selected option label(s), '
+      + 'and optional custom text. Only the task initiator (the session that dispatched the task) may answer.',
+    parameters: {
+      task_id: { type: 'string', required: true, description: 'The input-required task id carrying the worker\'s pending questions.' },
+      answers: {
+        type: 'array',
+        required: true,
+        description: 'One answer per pending question, each with the question id, selected option label(s), and optional custom text.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true, description: 'The pending question id (echoed from the forwarded question).' },
+            selected: { type: 'array', required: true, items: { type: 'string' }, description: 'Selected option label(s).' },
+            custom: { type: 'string', description: 'Optional free-text answer.' },
+          },
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: 'string', required: true },
+          status: { type: 'string', required: true },
+          answered: { type: 'number', required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `task ${result.taskId} answered ${result.answered} question(s); status ${result.status}`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:回答问题', kind: 'other', rawInput: { task_id: args.task_id } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:回答问题', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'answer_question')
+      const taskId = TaskId(args.task_id)
+      const task = ledger.get(taskId)
+      if (task === undefined) throw new Error(`no such task "${taskId}"`)
+      if (task.assignedBy !== callerId) throw new Error('仅任务发起方可回答')
+      if (task.status !== 'input-required' || task.pendingQuestions === undefined || task.pendingQuestions.length === 0) {
+        throw new Error(`task "${taskId}" has no pending question to answer`)
+      }
+      const normalized = normalizeQuestionAnswers(args.answers, task.pendingQuestions)
+      const resolved = deps.questions.resolve(taskId, { answers: normalized })
+      if (!resolved) {
+        throw new Error(`task "${taskId}" question is no longer pending (it may have timed out)`)
+      }
+      const resumed = await ledger.transition(taskId, 'working', { pendingQuestions: undefined, question: undefined })
+      if (!resumed.ok) throw new Error(resumed.message)
+      return { taskId: String(taskId), status: resumed.task.status, answered: normalized.length }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'claim_task',
+    description:
+      'As the executor, pull a task you were assigned back into working: a '
+      + 'submitted task is delivered automatically, but a re-delivery can land '
+      + 'while the previous delivery was lost (a rejected step, a restart) — '
+      + 'claiming gives you the key to recover it yourself and then report. '
+      + 'Only the assigned executor may claim. Claiming a task you already '
+      + 'have in working is a no-op that returns the current status.',
+    parameters: {
+      task_id: { type: 'string', required: true, description: 'The ledger task id to claim.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: 'string', required: true },
+          status: { type: 'string', required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `task ${result.taskId} is now ${result.status}`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:领取任务', kind: 'other', rawInput: { task_id: args.task_id } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:领取任务', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'claim_task')
+      const taskId = TaskId(args.task_id)
+      const task = ledger.get(taskId)
+      if (task === undefined) throw new Error(`no such task "${taskId}"`)
+      const denial = authorizeClaim(task, callerId)
+      if (denial !== undefined) throw new Error(denial.message)
+      // Already working AND the executor is the caller: idempotent no-op.
+      if (task.status === 'working') {
+        deps.noteActivity(callerId)
+        return { taskId: String(taskId), status: task.status }
+      }
+      if (task.status !== 'submitted') {
+        throw new Error(`task "${taskId}" is ${task.status}; only a submitted task can be claimed`)
+      }
+      const claimed = await ledger.transition(taskId, 'working')
+      if (!claimed.ok) throw new Error(claimed.message)
+      deps.noteActivity(callerId)
+      return { taskId: String(taskId), status: claimed.task.status }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'create_member',
+    description:
+      'One-click onboarding: create a full team member bound to a workspace. Required: '
+      + 'workspace (path or id) and name (session title). Optional: role (persona prose injected '
+      + 'as a system-prompt section), skills (runtime skill definitions mounted in the member\'s '
+      + 'scope), permissions (preset name, or {sandbox, approval} knobs), flow (flow id or name '
+      + 'to join), and description (capability-card text, at most 200 characters). The member '
+      + 'receives the deployment\'s default agent preset as its baseline composition when one '
+      + 'exists. mcp and modules are accepted but not implemented this phase (mcp needs '
+      + 'preset-file authoring; modules is a reserved extension point) — both surface as '
+      + 'warnings, never errors. Any step failure rolls back the created session; no '
+      + 'half-baked member survives. Use for real team members only — a member is a named '
+      + 'session with its own skills, permissions, and card.',
+    parameters: {
+      workspace: { type: 'string', required: true, description: 'Workspace path or id the new member is bound to.' },
+      name: { type: 'string', required: true, description: 'Session name (title); whitespace-padded values are trimmed.' },
+      role: { type: 'string', description: 'Role/persona prose injected as a system-prompt section.' },
+      skills: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            name: { type: 'string', required: true, description: 'Kebab-case skill identifier.' },
+            description: { type: 'string', required: true, description: 'Short routing description.' },
+            content: { type: 'string', required: true, description: 'Markdown instruction body.' },
+          },
+        },
+        description: 'Runtime skill definitions mounted into the member\'s scope.',
+      },
+      mcp: { type: 'object', additionalProperties: true, description: 'MCP configuration; not injectable programmatically this phase, skipped with a warning.' },
+      permissions: {
+        oneOf: [
+          { type: 'string', description: 'Permission preset name (e.g. workspace-write, danger-full-access).' },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sandbox: { type: 'string', enum: [...SANDBOX_MODES], required: true, description: 'Sandbox mode.' },
+              approval: { type: 'string', enum: [...APPROVAL_POLICIES], required: true, description: 'Approval policy.' },
+            },
+          },
+        ],
+        description: 'Preset name, or explicit {sandbox, approval} knobs; omitted keeps the workspace default.',
+      },
+      flow: { type: 'string', description: 'Flow id or name to join, resolved within the target workspace.' },
+      description: { type: 'string', description: 'Capability-card description (at most 200 characters).' },
+      modules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Reserved extension point; ignored this phase.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          sessionId: { type: 'string', required: true },
+          name: { type: 'string', required: true },
+          workspaceId: { type: 'string', required: true },
+          workspacePath: { type: 'string', required: true },
+          steps: { type: 'array', items: { type: 'string' }, required: true },
+          warnings: { type: 'array', items: { type: 'string' }, required: true },
+          flow: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true },
+              name: { type: 'string', required: true },
+            },
+          },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `member ${result.name} onboarded (${result.sessionId.slice(0, 8)}…; steps: ${result.steps.join(' → ')}; workspace: ${result.workspacePath})`
+          + (result.flow !== undefined ? `; joined flow "${result.flow.name}"` : '')
+          + (result.warnings.length > 0 ? `; warnings: ${result.warnings.join('; ')}` : ''),
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:创建成员', kind: 'other', rawInput: { workspace: args.workspace, name: args.name, ...(args.role !== undefined ? { role: args.role } : {}) } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:创建成员', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'create_member')
+      const caller = ctx.agents.get(callerId)
+      if (caller === undefined) throw new Error('create_member: the calling session is not a live agent')
+      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+      if (callerWorkspace === undefined) {
+        throw new Error('create_member: the calling session is not inside a registered workspace')
+      }
+      const parsed = parseCreateMemberInput(args)
+      if (!parsed.ok) throw new Error(parsed.error)
+      const host: CreateMemberHost = {
+        workspaceRegistry: workspaces,
+        agents: ctx.agents,
+        sessionTitle: ctx.sessionTitle,
+        permissionPresets: ctx.get('permissionPresets') as PermissionPresetHost | undefined,
+        agentPresets: ctx.get('agentPresets') as PresetMountHost | undefined,
+        ledger,
+      }
+      const result = await onboardMember(host, parsed.plan)
+      // The output schema infers mutable string arrays; copy the readonly
+      // result fields so the return is assignable under any inference variant.
+      return { ...result, steps: [...result.steps], warnings: [...result.warnings] }
     },
   }))
 }

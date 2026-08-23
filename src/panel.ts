@@ -23,7 +23,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry, Workspace } from '@deepseek-ai/dsh-workspace'
 import type { ReportStore } from './external.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
-import type { TaskRecord, TokenBuckets } from './types.ts'
+import type { TaskOutcome, TaskRecord, TokenBuckets } from './types.ts'
 import { fallbackTitle, readTitlesFile } from './titles.ts'
 
 export type { TokenBuckets } from './types.ts'
@@ -84,9 +84,20 @@ export interface TaskView {
   readonly reviewerTitle: string | null
   readonly retries: number
   readonly reason: string | null
-  readonly outcome: TaskRecord['outcome'] | null
+  /**
+   * The reviewer's verdict, `null` while a completed row awaits settlement.
+   * Always materialized by the builder (`task.outcome ?? null`), matching the
+   * client view-model's non-optional declaration.
+   */
+  readonly outcome: TaskOutcome | null
   readonly feedback: string | null
   readonly question: string | null
+  /** Structured questions pending the initiator's answer (decision 9); null when none. */
+  readonly pendingQuestions: readonly {
+    readonly id: string
+    readonly question: string
+    readonly options: readonly string[]
+  }[] | null
   readonly reportZone: 'inline' | 'hot' | 'cold' | 'missing' | null
   readonly hasReportRef: boolean
   readonly turn: number | null
@@ -157,7 +168,39 @@ export interface PanelSnapshot {
   readonly sessions: readonly SessionView[]
   readonly tasks: readonly TaskView[]
   readonly stats: PanelStats
+  /**
+   * Whether the running host instance predates the latest build (decision 7):
+   * the loaded code's build fingerprint differs from the disk fingerprint.
+   */
+  readonly instanceStale: boolean
+  /** Explanation for a stale instance; null when current. */
+  readonly staleMessage: string | null
+  /**
+   * How many stranded workers this boot re-woke (decision 10 C): zero means
+   * no recovery happened (fresh boot or nothing stranded).
+   */
+  readonly recoveredWorkers: number
+  /** Timestamp (epoch ms) of the last startup recovery; null when none. */
+  readonly recoveryAt: number | null
 }
+
+/** The decision-7 staleness verdict computed once at plugin startup. */
+export interface StaleInfo {
+  readonly stale: boolean
+  readonly message: string | null
+}
+
+/** The decision-10 C startup-recovery record (workers re-woken this boot). */
+export interface RecoveryInfo {
+  readonly recoveredWorkers: number
+  readonly recoveryAt: number | null
+}
+
+/** A current instance: no stale hint, no message, no recovery record. */
+const CURRENT_INSTANCE: StaleInfo = { stale: false, message: null }
+
+/** No recovery this boot. */
+const NO_RECOVERY: RecoveryInfo = { recoveredWorkers: 0, recoveryAt: null }
 
 /** Structural face of the projection registry (Service, optional at runtime). */
 interface ProjectionRegistryLike {
@@ -373,6 +416,13 @@ export async function buildTaskView(
     outcome: task.outcome ?? null,
     feedback: task.feedback !== undefined ? truncateCodePoints(task.feedback, 200) : null,
     question: task.question !== undefined ? truncateCodePoints(task.question, 200) : null,
+    pendingQuestions: task.pendingQuestions !== undefined && task.pendingQuestions.length > 0
+      ? task.pendingQuestions.map(question => ({
+        id: question.id,
+        question: truncateCodePoints(question.question, 200),
+        options: question.options.map(option => option.label),
+      }))
+      : null,
     reportZone: await detectReportZone(reports, task),
     hasReportRef: task.reportRef !== undefined,
     turn: task.turn ?? null,
@@ -433,6 +483,8 @@ async function visibleSessionIds(ctx: Context): Promise<Set<string>> {
  * @param ledger - the task ledger.
  * @param reports - the two-zone report store.
  * @param now - snapshot clock (ms since epoch); defaults to the current time.
+ * @param instance - the decision-7 staleness verdict computed at startup;
+ *   defaults to a current instance (no hint).
  * @returns the snapshot document.
  */
 export async function buildPanelSnapshot(
@@ -440,6 +492,8 @@ export async function buildPanelSnapshot(
   ledger: TaskLedger,
   reports: ReportStore,
   now: number = Date.now(),
+  instance: StaleInfo = CURRENT_INSTANCE,
+  recovery: RecoveryInfo = NO_RECOVERY,
 ): Promise<PanelSnapshot> {
   const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
   const workspaces = registry?.list() ?? []
@@ -556,6 +610,10 @@ export async function buildPanelSnapshot(
     tasks,
     flows,
     stats,
+    instanceStale: instance.stale,
+    staleMessage: instance.message,
+    recoveredWorkers: recovery.recoveredWorkers,
+    recoveryAt: recovery.recoveryAt,
   }
 }
 

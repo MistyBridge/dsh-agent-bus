@@ -250,6 +250,17 @@ export type LedgerResult =
   | { readonly ok: true; readonly task: TaskRecord }
   | { readonly ok: false; readonly message: string }
 
+/** Result of a flow mutation (decision 8). */
+export type FlowResult =
+  | { readonly ok: true; readonly flow: FlowRecord }
+  | { readonly ok: false; readonly message: string }
+
+/** Readable duplicate-flow-name refusal, listing the workspace's existing names. */
+function duplicateFlowMessage(name: string, existingNames: readonly string[]): string {
+  const list = existingNames.map(existing => `『${existing}』`).join('、')
+  return `该工作区已有同名流程『${name}』,现有流程:${list}`
+}
+
 /**
  * Durable task ledger over one storage domain.
  *
@@ -306,6 +317,7 @@ export class TaskLedger {
           title: row.content.trim().slice(0, 80) || 'untitled',
           dependencies: row.dependencies !== undefined ? [...row.dependencies] : undefined,
           handoffs: row.handoffs !== undefined ? [...row.handoffs] : undefined,
+          pendingQuestions: row.pendingQuestions !== undefined ? [...row.pendingQuestions] : undefined,
         }
         await this.table.put(row.id, migrated)
         continue
@@ -316,6 +328,7 @@ export class TaskLedger {
         status: 'queued',
         dependencies: row.dependencies !== undefined ? [...row.dependencies] : undefined,
         handoffs: row.handoffs !== undefined ? [...row.handoffs] : undefined,
+        pendingQuestions: row.pendingQuestions !== undefined ? [...row.pendingQuestions] : undefined,
       }
       await this.table.put(row.id, migrated)
     }
@@ -665,6 +678,11 @@ export class TaskLedger {
   /**
    * Create one flow: a named DAG container for tasks.
    *
+   * Decision 8: a flow name must be unique within its workspace — a duplicate
+   * throws with the existing names listed, so the caller can pick another.
+   * The check runs inside the write chain, so two concurrent creations cannot
+   * race past it.
+   *
    * @param id - flow identity (uuid).
    * @param name - display name, 1–80 characters.
    * @param description - optional note.
@@ -680,6 +698,12 @@ export class TaskLedger {
     workspacePath: string,
   ): Promise<FlowRecord> {
     return this.enqueue(async () => {
+      const siblings = [...this.flows.entries()]
+        .map(([, flow]) => flow)
+        .filter(flow => flow.workspacePath === workspacePath)
+      if (siblings.some(flow => flow.name === name)) {
+        throw new Error(duplicateFlowMessage(name, siblings.map(flow => flow.name)))
+      }
       const record: StoredFlowRecord = {
         id,
         name,
@@ -703,6 +727,50 @@ export class TaskLedger {
   /** Read one flow. */
   getFlow(id: string): FlowRecord | undefined {
     return this.flows.get(id)
+  }
+
+  /**
+   * Rename one flow, optionally replacing its description.
+   *
+   * Decision 8: same-workspace uniqueness applies to renames too — renaming
+   * onto an existing sibling's name is refused. `description` is replaced
+   * when passed, cleared when empty, and kept when `undefined`. The duplicate
+   * check runs inside the write chain like {@link createFlow}.
+   *
+   * @param flowId - the flow to rename.
+   * @param name - the new display name, 1–80 characters.
+   * @param description - replacement note; `''` clears it, `undefined` keeps it.
+   * @returns the renamed flow, or a refusal.
+   */
+  async renameFlow(
+    flowId: string,
+    name: string,
+    description: string | undefined,
+  ): Promise<FlowResult> {
+    return this.enqueue(async () => {
+      const current = this.flows.get(flowId)
+      if (current === undefined) {
+        return { ok: false as const, message: `no such flow "${flowId}"` }
+      }
+      const siblings = [...this.flows.entries()]
+        .map(([, flow]) => flow)
+        .filter(flow => flow.id !== flowId && flow.workspacePath === current.workspacePath)
+      if (siblings.some(flow => flow.name === name)) {
+        return {
+          ok: false as const,
+          message: duplicateFlowMessage(name, siblings.map(flow => flow.name)),
+        }
+      }
+      const updated: StoredFlowRecord = {
+        ...current,
+        name,
+        ...(description !== undefined
+          ? { description: description === '' ? undefined : description }
+          : {}),
+      }
+      await this.flows.put(flowId, updated)
+      return { ok: true as const, flow: updated }
+    })
   }
 
   /**
@@ -941,6 +1009,26 @@ export class TaskLedger {
    */
   listBy(sessionId: SessionId): TaskRecord[] {
     return this.listAll().filter(row => row.assignedBy === sessionId)
+  }
+
+  /**
+   * The newest `working` row assigned to one session — the single task a
+   * worker is executing (workers run one delivered task at a time).
+   *
+   * The question bridge uses this to judge whether an `ask_user_question`
+   * call is A2A (forward to the task initiator) or a direct human-agent
+   * conversation (leave to the original chain).
+   *
+   * @param sessionId - the calling session.
+   * @returns the latest working row, or `undefined` when none.
+   */
+  findWorkingFor(sessionId: SessionId): TaskRecord | undefined {
+    let newest: TaskRecord | undefined
+    for (const row of this.listAll()) {
+      if (row.assignedTo !== sessionId || row.status !== 'working') continue
+      if (newest === undefined || Date.parse(row.updatedAt) > Date.parse(newest.updatedAt)) newest = row
+    }
+    return newest
   }
 
   /**

@@ -13,53 +13,53 @@ importers:
         version: 4.4.3
     devDependencies:
       '@deepseek-ai/cordis':
-        specifier: link:../deepseek-harness-master/vendor/cordis
-        version: link:../deepseek-harness-master/vendor/cordis
+        specifier: link:../vendor/cordis
+        version: link:../vendor/cordis
       '@deepseek-ai/dsh-agent':
-        specifier: link:../deepseek-harness-master/packages/core/agent
-        version: link:../deepseek-harness-master/packages/core/agent
+        specifier: link:../packages/core/agent
+        version: link:../packages/core/agent
       '@deepseek-ai/dsh-brand':
-        specifier: link:../deepseek-harness-master/packages/util/brand
-        version: link:../deepseek-harness-master/packages/util/brand
+        specifier: link:../packages/util/brand
+        version: link:../packages/util/brand
       '@deepseek-ai/dsh-client-runtime':
-        specifier: link:..\deepseek-harness-master\packages\client\runtime
-        version: link:../deepseek-harness-master/packages/client/runtime
+        specifier: link:../packages/client/runtime
+        version: link:../packages/client/runtime
       '@deepseek-ai/dsh-client-ui-primitives':
-        specifier: link:..\deepseek-harness-master\packages\client\ui-primitives
-        version: link:../deepseek-harness-master/packages/client/ui-primitives
+        specifier: link:../packages/client/ui-primitives
+        version: link:../packages/client/ui-primitives
       '@deepseek-ai/dsh-client-ui-slots':
-        specifier: link:..\deepseek-harness-master\packages\client\ui-slots
-        version: link:../deepseek-harness-master/packages/client/ui-slots
+        specifier: link:../packages/client/ui-slots
+        version: link:../packages/client/ui-slots
       '@deepseek-ai/dsh-client-ui-tool':
-        specifier: link:..\deepseek-harness-master\packages\client\ui-tool
-        version: link:../deepseek-harness-master/packages/client/ui-tool
+        specifier: link:../packages/client/ui-tool
+        version: link:../packages/client/ui-tool
       '@deepseek-ai/dsh-home-paths':
-        specifier: link:..\deepseek-harness-master\packages\util\home-paths
-        version: link:../deepseek-harness-master/packages/util/home-paths
+        specifier: link:../packages/util/home-paths
+        version: link:../packages/util/home-paths
       '@deepseek-ai/dsh-llm':
-        specifier: link:../deepseek-harness-master/packages/llm/llm
-        version: link:../deepseek-harness-master/packages/llm/llm
+        specifier: link:../packages/llm/llm
+        version: link:../packages/llm/llm
       '@deepseek-ai/dsh-session':
-        specifier: link:../deepseek-harness-master/packages/core/session
-        version: link:../deepseek-harness-master/packages/core/session
+        specifier: link:../packages/core/session
+        version: link:../packages/core/session
       '@deepseek-ai/dsh-session-title':
-        specifier: link:..\deepseek-harness-master\packages\session\session-title
-        version: link:../deepseek-harness-master/packages/session/session-title
+        specifier: link:../packages/session/session-title
+        version: link:../packages/session/session-title
       '@deepseek-ai/dsh-storage-domain':
-        specifier: link:../deepseek-harness-master/packages/storage/storage-domain
-        version: link:../deepseek-harness-master/packages/storage/storage-domain
+        specifier: link:../packages/storage/storage-domain
+        version: link:../packages/storage/storage-domain
       '@deepseek-ai/dsh-system-prompt':
-        specifier: link:../deepseek-harness-master/packages/core/system-prompt
-        version: link:../deepseek-harness-master/packages/core/system-prompt
+        specifier: link:../packages/core/system-prompt
+        version: link:../packages/core/system-prompt
       '@deepseek-ai/dsh-tools':
-        specifier: link:../deepseek-harness-master/packages/core/tools
-        version: link:../deepseek-harness-master/packages/core/tools
+        specifier: link:../packages/core/tools
+        version: link:../packages/core/tools
       '@deepseek-ai/dsh-workspace':
-        specifier: link:../deepseek-harness-master/packages/workspace/workspace
-        version: link:../deepseek-harness-master/packages/workspace/workspace
+        specifier: link:../packages/workspace/workspace
+        version: link:../packages/workspace/workspace
       '@deepseek-ai/schemastery':
-        specifier: link:../deepseek-harness-master/vendor/schemastery
-        version: link:../deepseek-harness-master/vendor/schemastery
+        specifier: link:../vendor/schemastery
+        version: link:../vendor/schemastery
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1

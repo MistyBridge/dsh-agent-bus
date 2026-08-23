@@ -10,9 +10,23 @@
 
 **DeepSeek Harness 上的多 Agent 编排。** 别再当传话筒。
 
-dsh-agent-bus 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：把同一工作区里的活跃会话编成一套班子——互相派活、验收对方产出、按 DAG 跑多步骤流程。投递走的还是你已经在用的 Inbox。
+dsh-agent-bus 是 [DeepSeek Harness](https://deepseek-ai/deepseek-harness) 插件：把同一工作区里的活跃会话编成一套班子——互相派活、验收对方产出、按 DAG 跑多步骤流程。投递走的还是你已经在用的 Inbox。
 
 专家还是那些专家。复制粘贴的人不再是你。
+
+## 这个插件能做什么
+
+来自真实团队在总线上的两张运行画面：
+
+| 任务工作台 | 流程(DAG)看板 |
+|---|---|
+| <img src="docs/images/agent-bus-test.png" alt="任务工作台" width="420"> | <img src="docs/images/QQ_1787487778189.png" alt="流程看板" width="420"> |
+
+- **派的是活，不是消息** —— `create_task` 给同伴一件带验收标准、带验收人的工作；`send_note` 只是没有生命周期的轻量问候。按轻重选通道，面板上一眼看到每件工作的状态。
+- **计划不用你插手也能跑** —— `create_flow` 建一张命名 DAG：每个任务只在全部前置结算后投递，终态失败沿链条传播。看板一次渲染一个流程，已归档的祖先淡显。
+- **配的是真专家** —— 每个总线成员都是普通 dsh 会话，自带独立的 skills、MCP 服务器、权限预设和模型。`create_member` 一键入职完整成员（工作区绑定、命名、角色、技能、权限、能力卡片），失败自动回滚。
+- **崩溃后自动恢复** —— 重启后插件自动唤醒每个滞留执行者并恢复完整工具集，每人一条恢复通知。不用任何人手动把人拉回来。
+- **团队纪律** —— 已完成/已归档任务是公开历史，进行中任务仅相关者可读；PM 代审子成员审批，工人可自领重投任务，流程可改名（`rename_flow`）便于管理。
 
 ## 为什么要做这个
 
@@ -141,9 +155,13 @@ Harness 已经有 **sub-agent**：父会话调用 `spawn_subagent`，子会话�
 | 给一个同伴一件要验收的活 | `create_task` |
 | 按顺序跑一个多步骤计划 | `create_flow`，再带 `flow_id` / `dependencies` 的 `create_task` |
 | 交差 / 验收 / 重做 / 停掉 / 反问 / 换人 | `report_task` · `settle_task` · `cancel_task` · `request_input` · `reassign_task` |
+| 自己领回被重投的任务 | `claim_task` |
+| 回答执行者的结构化提问 | `answer_question` |
 | 把上下文交给下一棒 | `submit_handoff` |
 | 改还没投递的节点，或查记录 | `edit_task` · `list_flows` · `list_tasks` · `get_task` |
+| 给流程改名，让任务组更好管理 | `rename_flow` |
 | 看谁在线，声明自己能做什么 | `list_peers` · `update_card` |
+| 把新成员一键入职到工作区 | `create_member` |
 
 ## 文档
 

@@ -47,7 +47,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
+    "build": "node scripts/write-build-fingerprint.mjs && tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run"
   },
@@ -59,11 +59,13 @@
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-brand": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-session-title": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-storage-domain": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.5",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
@@ -75,6 +77,12 @@
       "optional": true
     },
     "@deepseek-ai/dsh-brand": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-sandbox-policy": {
       "optional": true
     },
     "@deepseek-ai/dsh-session": {
@@ -89,6 +97,9 @@
     "@deepseek-ai/dsh-tools": {
       "optional": true
     },
+    "@deepseek-ai/dsh-user-approval": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-workspace": {
       "optional": true
     },
@@ -100,22 +111,24 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "link:../deepseek-harness-master/vendor/cordis",
-    "@deepseek-ai/dsh-agent": "link:../deepseek-harness-master/packages/core/agent",
-    "@deepseek-ai/dsh-brand": "link:../deepseek-harness-master/packages/util/brand",
-    "@deepseek-ai/dsh-client-runtime": "link:..\\deepseek-harness-master\\packages\\client\\runtime",
-    "@deepseek-ai/dsh-client-ui-primitives": "link:..\\deepseek-harness-master\\packages\\client\\ui-primitives",
-    "@deepseek-ai/dsh-client-ui-slots": "link:..\\deepseek-harness-master\\packages\\client\\ui-slots",
-    "@deepseek-ai/dsh-client-ui-tool": "link:..\\deepseek-harness-master\\packages\\client\\ui-tool",
-    "@deepseek-ai/dsh-home-paths": "link:..\\deepseek-harness-master\\packages\\util\\home-paths",
-    "@deepseek-ai/dsh-llm": "link:../deepseek-harness-master/packages/llm/llm",
-    "@deepseek-ai/dsh-session": "link:../deepseek-harness-master/packages/core/session",
-    "@deepseek-ai/dsh-session-title": "link:..\\deepseek-harness-master\\packages\\session\\session-title",
-    "@deepseek-ai/dsh-storage-domain": "link:../deepseek-harness-master/packages/storage/storage-domain",
-    "@deepseek-ai/dsh-system-prompt": "link:../deepseek-harness-master/packages/core/system-prompt",
-    "@deepseek-ai/dsh-tools": "link:../deepseek-harness-master/packages/core/tools",
-    "@deepseek-ai/dsh-workspace": "link:../deepseek-harness-master/packages/workspace/workspace",
-    "@deepseek-ai/schemastery": "link:../deepseek-harness-master/vendor/schemastery",
+    "@deepseek-ai/cordis": "link:../vendor/cordis",
+    "@deepseek-ai/dsh-agent": "link:../packages/core/agent",
+    "@deepseek-ai/dsh-brand": "link:../packages/util/brand",
+    "@deepseek-ai/dsh-client-runtime": "link:../packages/client/runtime",
+    "@deepseek-ai/dsh-client-ui-primitives": "link:../packages/client/ui-primitives",
+    "@deepseek-ai/dsh-client-ui-slots": "link:../packages/client/ui-slots",
+    "@deepseek-ai/dsh-client-ui-tool": "link:../packages/client/ui-tool",
+    "@deepseek-ai/dsh-home-paths": "link:../packages/util/home-paths",
+    "@deepseek-ai/dsh-llm": "link:../packages/llm/llm",
+    "@deepseek-ai/dsh-sandbox-policy": "link:../packages/sandbox/sandbox-policy",
+    "@deepseek-ai/dsh-session": "link:../packages/core/session",
+    "@deepseek-ai/dsh-session-title": "link:../packages/session/session-title",
+    "@deepseek-ai/dsh-storage-domain": "link:../packages/storage/storage-domain",
+    "@deepseek-ai/dsh-system-prompt": "link:../packages/core/system-prompt",
+    "@deepseek-ai/dsh-tools": "link:../packages/core/tools",
+    "@deepseek-ai/dsh-user-approval": "link:../packages/interaction/user-approval",
+    "@deepseek-ai/dsh-workspace": "link:../packages/workspace/workspace",
+    "@deepseek-ai/schemastery": "link:../vendor/schemastery",
     "@types/node": "^22.20.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
