@@ -3,9 +3,8 @@ lib/
 *.log
 .DS_Store
 
-# 本地 e2e 资产,不推送
-# (e2e 依赖本机 dsh 会话与路径;vitest 单测 *.spec.ts 需要入库供 CI 运行)
-tests/e2e/
+# 端到端场景随仓库分发,供有运行中 dsh + live 会话时手动跑;
+# 不被 vitest 拾取(include 只匹配 *.spec.ts),也不影响构建。
 
 # --- 密钥与本地环境,永不入库 ---
 .env
