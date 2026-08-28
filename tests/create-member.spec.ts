@@ -29,7 +29,7 @@ import {
   type OnboardPlan,
   type SkillSpec,
 } from '../src/create-member.ts'
-import { TaskLedger } from '../src/ledger.ts'
+import { TaskLedger } from '../src/ledger/ledger.ts'
 import {
   createMemoryCtx,
   makeFlow,

@@ -37,7 +37,12 @@ import { fileURLToPath } from 'node:url'
 import { BUILD_FINGERPRINT } from './build-fingerprint.ts'
 import { ReportStore } from './external.ts'
 import { isInstanceStale, readDiskFingerprint, staleMessage } from './fingerprint.ts'
-import { TaskLedger } from './ledger.ts'
+import type { TaskLedger } from './ledger/ledger.ts'
+import {
+  apply as applyLedgerPlugin,
+  inject as injectLedgerPlugin,
+  name as ledgerPluginName,
+} from './ledger/index.ts'
 import { buildPanelSnapshot, type RecoveryInfo, type StaleInfo } from './panel.ts'
 import { installApprovalBridge } from './approval-bridge.ts'
 import { registerQuestionBridge, QuestionRegistry } from './question-bridge.ts'
@@ -139,7 +144,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     text: USAGE_OVERVIEW,
   })
 
-  const ledger = await TaskLedger.open(ctx)
+  // Mount the ledger sub-plugin first: it is the single opener of the
+  // storage domain and provides the `'ledger'` value service. Consumers below
+  // obtain the SAME instance from `ctx.get('ledger')` — never open it again.
+  await ctx.plugin({
+    name: ledgerPluginName,
+    inject: injectLedgerPlugin,
+    apply: applyLedgerPlugin,
+  })
+  const ledger = ctx.get('ledger') as TaskLedger
 
   // Decision 7: detect a lib/ rebuild this process did not pick up. The loaded
   // code carries its build-time fingerprint; the disk fingerprint is read once

@@ -22,7 +22,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry, Workspace } from '@deepseek-ai/dsh-workspace'
 import type { ReportStore } from './external.ts'
-import { blockedByOf, type TaskLedger } from './ledger.ts'
+import { blockedByOf, type TaskLedger } from './ledger/ledger.ts'
 import type { TaskOutcome, TaskRecord, TokenBuckets } from './domain/types.ts'
 import { fallbackTitle, readTitlesFile } from './titles.ts'
 

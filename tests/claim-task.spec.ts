@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { shouldHeartbeatRedeliver } from '../src/scheduler.ts'
-import type { NewTask } from '../src/ledger.ts'
+import type { NewTask } from '../src/ledger/ledger.ts'
 import { TaskId } from '../src/domain/types.ts'
 import {
   createToolHarness,

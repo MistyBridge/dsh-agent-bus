@@ -33,7 +33,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { checkedTool } from './checked-tool.ts'
 import { notifySession } from './delivery.ts'
-import type { TaskLedger } from './ledger.ts'
+import type { TaskLedger } from './ledger/ledger.ts'
 import type { TaskId } from './domain/types.ts'
 import type { ApprovalOutcome, ApprovalRequestLike } from './domain/types.ts'
 

@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
-import { isTerminal } from './ledger.ts'
+import { isTerminal } from './ledger/ledger.ts'
 import type { TaskRecord } from './domain/types.ts'
 
 /** Why an operation was refused. */

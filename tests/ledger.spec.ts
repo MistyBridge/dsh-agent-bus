@@ -21,7 +21,7 @@ import {
   validateDependencies,
   type LedgerResult,
   type NewTask,
-} from '../src/ledger.ts'
+} from '../src/ledger/ledger.ts'
 import { dispatchOne, dispatchReadyTasks, releaseDependents } from '../src/scheduler.ts'
 import { admitContent } from '../src/delivery.ts'
 import { TaskId, type TaskRecord } from '../src/domain/types.ts'

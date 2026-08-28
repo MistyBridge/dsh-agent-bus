@@ -21,7 +21,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { notifySession } from './delivery.ts'
-import type { TaskLedger } from './ledger.ts'
+import type { TaskLedger } from './ledger/ledger.ts'
 import { TaskId, type PendingQuestion, type PendingQuestionOption, type QuestionAnswer, type QuestionAnswerItem } from './domain/types.ts'
 
 /**

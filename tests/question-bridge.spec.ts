@@ -25,7 +25,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { clearNoticeMerges, flushNoticeMerges } from '../src/delivery.ts'
-import { TaskLedger } from '../src/ledger.ts'
+import { TaskLedger } from '../src/ledger/ledger.ts'
 import {
   QuestionRegistry,
   registerQuestionBridge,
