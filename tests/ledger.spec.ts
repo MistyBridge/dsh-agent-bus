@@ -24,7 +24,7 @@ import {
 } from '../src/ledger.ts'
 import { dispatchOne, dispatchReadyTasks, releaseDependents } from '../src/scheduler.ts'
 import { admitContent } from '../src/delivery.ts'
-import { TaskId, type TaskRecord } from '../src/types.ts'
+import { TaskId, type TaskRecord } from '../src/domain/types.ts'
 import {
   MemoryMediaPool,
 } from '../../packages/storage/storage-domain/tests/helpers/memory-backend.ts'

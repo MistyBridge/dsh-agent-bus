@@ -15,7 +15,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import { resumeStrandedTasks } from '../src/scheduler.ts'
 import { TaskLedger } from '../src/ledger.ts'
 import {

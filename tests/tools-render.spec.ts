@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { MEMBER_ROLE_SECTION } from '../src/member-config.ts'
 import { canReadTask, isActiveTask, renderTaskDetail, renderTaskRow } from '../src/tools.ts'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import {
   makeNewTask,
   makeTask,

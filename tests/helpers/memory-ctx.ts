@@ -24,7 +24,7 @@ import {
   MemoryStorageBackend,
 } from '../../../packages/storage/storage-domain/tests/helpers/memory-backend.ts'
 import { TaskLedger, type NewTask } from '../../src/ledger.ts'
-import { TaskId, type FlowRecord, type TaskRecord } from '../../src/types.ts'
+import { TaskId, type FlowRecord, type TaskRecord } from '../../src/domain/types.ts'
 
 /** 冒烟与后续用例共享的固定会话/工作区标识。 */
 export const SESSION_A = SessionId('session-a')

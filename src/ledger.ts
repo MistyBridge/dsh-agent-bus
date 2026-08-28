@@ -31,7 +31,7 @@ import {
   type StoredPeerCard,
   type StoredPendingMessage,
   type StoredTaskRecord,
-} from './spec.ts'
+} from './domain/spec.ts'
 import {
   TaskId,
   type BatchRecord,
@@ -43,7 +43,7 @@ import {
   type TaskRecord,
   type TaskStatus,
   type TokenBuckets,
-} from './types.ts'
+} from './domain/types.ts'
 
 /**
  * Lifecycle transitions. `completed` is NOT terminal: a failure verdict sends

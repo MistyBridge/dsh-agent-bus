@@ -30,7 +30,7 @@ import {
 import type { ReportStore } from '../src/external.ts'
 import { ARCHIVE_AGE_MS as CLIENT_ARCHIVE_AGE_MS, isDagArchived } from '../src/client/panel-model.ts'
 import { TaskLedger } from '../src/ledger.ts'
-import { TaskId, type TaskRecord, type TokenBuckets } from '../src/types.ts'
+import { TaskId, type TaskRecord, type TokenBuckets } from '../src/domain/types.ts'
 import { fallbackTitle } from '../src/titles.ts'
 import {
   SESSION_A,

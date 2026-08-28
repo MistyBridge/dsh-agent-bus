@@ -25,7 +25,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { checkedTool, ToolOutputMismatchError } from '../src/checked-tool.ts'
 import { TOOL_NAMES as DOC_NAMES } from '../src/tool-docs.ts'
 import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools.ts'
-import { TaskId, type TaskRecord } from '../src/types.ts'
+import { TaskId, type TaskRecord } from '../src/domain/types.ts'
 import {
   SESSION_A,
   SESSION_B,

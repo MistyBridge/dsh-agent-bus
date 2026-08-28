@@ -31,7 +31,7 @@ import {
   deliverTask,
 } from '../src/delivery.ts'
 import { DispatchRateLimiter } from '../src/rate-limit.ts'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import {
   makeNewTask,
   SESSION_A,

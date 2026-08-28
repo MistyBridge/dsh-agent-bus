@@ -56,7 +56,7 @@ import { normalizeQuestionAnswers, type QuestionRegistry } from './question-brid
 import { DispatchRateLimiter } from './rate-limit.ts'
 import { dispatchOne } from './scheduler.ts'
 import { wakeSession } from './wake.ts'
-import { TaskId, type DeliveryMode, type TaskRecord, type TokenBuckets } from './types.ts'
+import { TaskId, type DeliveryMode, type TaskRecord, type TokenBuckets } from './domain/types.ts'
 
 /** Resolved plugin configuration the tools read. */
 export interface ToolsConfig {

@@ -28,7 +28,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { clearNoticeMerges, flushNoticeMerges } from '../src/delivery.ts'
 import { TaskLedger } from '../src/ledger.ts'
 import { installApprovalBridge, type ApprovalBridgeConfig } from '../src/approval-bridge.ts'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import {
   createMemoryCtx,
   makeNewTask,

@@ -14,7 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { buildTaskMessage, deliverTask, notifySession } from './delivery.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
-import type { TaskId, TaskRecord } from './types.ts'
+import type { TaskId, TaskRecord } from './domain/types.ts'
 import { wakeSession } from './wake.ts'
 
 /**

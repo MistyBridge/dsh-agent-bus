@@ -25,7 +25,7 @@ import {
   flushNoticeMerges,
   notifySession,
 } from '../src/delivery.ts'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import {
   makeNewTask,
   SESSION_A,

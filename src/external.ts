@@ -20,7 +20,7 @@
 
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { TaskId } from './types.ts'
+import type { TaskId } from './domain/types.ts'
 
 /** Hot-zone files untouched for this long are swept (7 days). */
 export const HOT_IDLE_MS = 7 * 24 * 60 * 60 * 1000

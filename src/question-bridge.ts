@@ -22,7 +22,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { notifySession } from './delivery.ts'
 import type { TaskLedger } from './ledger.ts'
-import { TaskId, type PendingQuestion, type PendingQuestionOption, type QuestionAnswer, type QuestionAnswerItem } from './types.ts'
+import { TaskId, type PendingQuestion, type PendingQuestionOption, type QuestionAnswer, type QuestionAnswerItem } from './domain/types.ts'
 
 /**
  * The user message that claimed the current open turn, or `undefined`.

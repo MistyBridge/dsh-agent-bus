@@ -34,8 +34,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { checkedTool } from './checked-tool.ts'
 import { notifySession } from './delivery.ts'
 import type { TaskLedger } from './ledger.ts'
-import type { TaskId } from './types.ts'
-import type { ApprovalOutcome, ApprovalRequestLike } from './types.ts'
+import type { TaskId } from './domain/types.ts'
+import type { ApprovalOutcome, ApprovalRequestLike } from './domain/types.ts'
 
 /** Tunables the approval bridge reads. */
 export interface ApprovalBridgeConfig {

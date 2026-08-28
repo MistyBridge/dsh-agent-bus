@@ -34,7 +34,7 @@ import {
 } from '../src/question-bridge.ts'
 import { DispatchRateLimiter } from '../src/rate-limit.ts'
 import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools.ts'
-import { TaskId, type PendingQuestion, type QuestionAnswer } from '../src/types.ts'
+import { TaskId, type PendingQuestion, type QuestionAnswer } from '../src/domain/types.ts'
 import {
   createMemoryCtx,
   makeNewTask,

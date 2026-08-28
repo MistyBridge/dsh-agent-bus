@@ -48,7 +48,7 @@ import { dispatchOne, dispatchReadyTasks, releaseDependents, resumeStrandedTasks
 import { setWakeRoute } from './wake.ts'
 import { registerAgentBusTools, type ToolsConfig } from './tools.ts'
 import { USAGE_OVERVIEW } from './tool-docs.ts'
-import { TaskId } from './types.ts'
+import { TaskId } from './domain/types.ts'
 
 export const name = 'agent-bus'
 

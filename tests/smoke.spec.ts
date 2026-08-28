@@ -9,7 +9,7 @@ import {
   MemoryMediaPool,
 } from '../../packages/storage/storage-domain/tests/helpers/memory-backend.ts'
 import { TaskLedger } from '../src/ledger.ts'
-import { TaskId } from '../src/types.ts'
+import { TaskId } from '../src/domain/types.ts'
 import {
   SESSION_B,
   createMemoryCtx,
