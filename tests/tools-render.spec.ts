@@ -23,6 +23,7 @@ import {
   SESSION_A,
   SESSION_B,
   SESSION_REVIEWER,
+  WORKSPACE,
 } from './helpers/memory-ctx.ts'
 import {
   createToolHarness,
@@ -480,9 +481,55 @@ describe('renderTaskDetail', () => {
   })
 })
 
-describe('list_peers render guidance', () => {
-  it('empty output tells the caller to create a member or confirm the workspace', async () => {
+describe('list_peers visible-set semantics (live + dormant)', () => {
+  it('lists a dormant same-workspace session as a wakeable peer', async () => {
     const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    // SESSION_B and SESSION_REVIEWER are in the workspace account but not live.
+    const peers = await harness.run('list_peers', {}, SESSION_A) as {
+      id: string; title: string; status: string; pendingTasks: number;
+    }[]
+    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
+    const dormant = peers.find(p => p.id === String(SESSION_B))!
+    expect(dormant.status).toBe('dormant')
+    expect(dormant.title.length).toBeGreaterThan(0)
+    expect(dormant.pendingTasks).toBe(0)
+  })
+
+  it('marks a live peer running/idle and keeps its title', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.setTitle(SESSION_B, 'Quant Strategy')
+    const peers = await harness.run('list_peers', {}, SESSION_A) as {
+      id: string; title: string; status: string; pendingTasks: number;
+    }[]
+    const live = peers.find(p => p.id === String(SESSION_B))!
+    expect(live.status).toBe('running')
+    expect(live.title).toBe('Quant Strategy')
+  })
+
+  it('hides an archived same-workspace session', async () => {
+    const harness = await newHarness({ archived: [SESSION_B] })
+    harness.agents.add(makeAgent(SESSION_A))
+    const peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
+    expect(peers.map(p => p.id)).not.toContain(String(SESSION_B))
+    expect(peers).toHaveLength(1)
+    expect(peers[0]!.id).toBe(String(SESSION_REVIEWER))
+    expect(peers[0]!.status).toBe('dormant')
+  })
+
+  it('hides a subagent-origin session and excludes the caller', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_REVIEWER, { origin: 'subagent' }))
+    const peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
+    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B)])
+    expect(peers[0]!.status).toBe('dormant')
+  })
+
+  it('empty account keeps the create_member / confirm-workspace guidance', async () => {
+    const harness = await newHarness({ workspaces: [{ path: WORKSPACE, sessionIds: [SESSION_A] }] })
     harness.agents.add(makeAgent(SESSION_A))
     const peers = await harness.run('list_peers', {}, SESSION_A)
     expect(peers).toEqual([])
@@ -495,7 +542,7 @@ describe('list_peers render guidance', () => {
   })
 
   it('renders the peer id as the target value and notes id over title', async () => {
-    const harness = await newHarness()
+    const harness = await newHarness({ workspaces: [{ path: WORKSPACE, sessionIds: [SESSION_A, SESSION_B] }] })
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_B))
     harness.setTitle(SESSION_B, 'Quant Strategy')

@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { assertNever } from '@deepseek-ai/dsh-llm'
 import { APPROVAL_POLICIES } from '@deepseek-ai/dsh-user-approval'
 import { SANDBOX_MODES } from '@deepseek-ai/dsh-sandbox-policy'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { checkedTool } from './checked-tool.ts'
 import {
   onboardMember,
@@ -44,6 +45,7 @@ import { TOOL_DOCS, TOOL_NAMES, type ToolName } from './tool-docs.ts'
 import type { ReportStore } from './external.ts'
 import { blockedByOf, type TaskLedger } from './ledger.ts'
 import { isTokenBuckets, staffRoles } from './panel.ts'
+import { fallbackTitle, readTitlesFile } from './titles.ts'
 import { normalizeQuestionAnswers, type QuestionRegistry } from './question-bridge.ts'
 import { DispatchRateLimiter } from './rate-limit.ts'
 import { dispatchOne } from './scheduler.ts'
@@ -397,6 +399,56 @@ function snapshotTokensAtDispatch(
 }
 
 /**
+ * Resolve the display title for one listed peer.
+ *
+ * A live peer's title is the session-title projection (the same source the
+ * harness sidebar folds), matching what the model saw in the session directory;
+ * a dormant peer has no live session, so its title comes from the durable
+ * titles cache (`session_projcache.json`). Either falls back to the id-prefix
+ * so every listed peer stays identifiable.
+ *
+ * @param ctx - plugin context carrying the session-title service.
+ * @param titles - durable session id → title cache.
+ * @param agent - the live agent, or `undefined` when the peer is dormant.
+ * @param sessionId - the peer's session id.
+ * @returns the title, always a non-empty string.
+ */
+function peerTitleOf(
+  ctx: Context,
+  titles: ReadonlyMap<string, string>,
+  agent: Agent | undefined,
+  sessionId: SessionId,
+): string {
+  if (agent !== undefined) {
+    const liveTitle = ctx.sessionTitle.get(agent.session)?.title
+    if (liveTitle !== undefined && liveTitle !== '') return liveTitle
+  }
+  return titles.get(String(sessionId)) ?? fallbackTitle(String(sessionId))
+}
+
+/** Collect every subagent session id: live origins plus persisted headers. */
+async function subagentSessionIds(ctx: Context): Promise<Set<string>> {
+  const out = new Set<string>()
+  for (const agent of ctx.agents.list()) {
+    if (agent.session.header.origin === 'subagent') out.add(String(agent.id))
+  }
+  const persistence = ctx.get('sessionPersistence') as
+    | { list(): Promise<Array<{ id: SessionId; origin?: string }>> }
+    | undefined
+  if (persistence !== undefined) {
+    try {
+      for (const header of await persistence.list()) {
+        if (header.origin === 'subagent') out.add(String(header.id))
+      }
+    } catch {
+      // A persistence fault must not hide peers from a caller; degrade to the
+      // live-origin set already collected.
+    }
+  }
+  return out
+}
+
+/**
  * Register the fifteen agent-bus tools, each behind the output-schema gate
  * (`checkedTool`): an execute return that drifts from its declared
  * `output.schema` fails inside the tool with a structured, readable error
@@ -412,13 +464,14 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
   ctx.tools.register(checkedTool({
     name: 'list_peers',
     description:
-      'List the other live agent sessions in your workspace, which are the only valid targets for '
-      + 'create_task. Reachability is workspace membership: a session counts as a peer when its '
-      + 'working directory is the same registered workspace as yours. Archived sessions never appear. '
-      + 'Status comes from the live registry — working means it is busy right now, idle means it is '
-      + 'loaded and between turns. A peer that wrote a card shows its self-description and '
-      + 'machine-readable capabilities. This snapshot is not a delivery promise; create_task '
-      + 'performs the authoritative check and may still refuse.',
+      'List the other agent sessions in your workspace — live and dormant — which are the valid '
+      + 'targets for create_task and send_note. Reachability is workspace membership: a session '
+      + 'counts as a peer when its working directory is the same registered workspace as yours. '
+      + 'Archived sessions never appear. A dormant peer is a real same-workspace member that is not '
+      + 'currently live but can be woken for delivery. Status is running (busy now), idle (loaded, '
+      + 'between turns), or dormant (not live, wakeable). A peer that wrote a card shows its '
+      + 'self-description and machine-readable capabilities. This snapshot is not a delivery '
+      + 'promise; create_task performs the authoritative check and may still refuse.',
     parameters: {},
     output: {
       schema: {
@@ -429,7 +482,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
           properties: {
             id: { type: 'string', required: true },
             title: { type: 'string' },
-            status: { type: 'string', required: true, enum: ['running', 'idle'] },
+            status: { type: 'string', required: true, enum: ['running', 'idle', 'dormant'] },
             pendingTasks: { type: 'number', required: true },
             description: { type: 'string' },
             capabilities: {
@@ -471,27 +524,36 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       if (caller === undefined) throw new Error('list_peers: the calling session is not a live agent')
       const workspacePath = await resolveWorkspacePath(workspaces, caller)
       if (workspacePath === undefined) return []
+      // Peers are the caller's workspace account, NOT just live agents: a
+      // dormant (persisted but not currently live) same-workspace session is
+      // still a valid, wakeable target and must appear. The registry account
+      // is the sidebar's source, so whatever the sidebar shows is the peer set.
+      const workspace = workspaces.list().find(entry => entry.path === workspacePath)
+      if (workspace === undefined) return []
       const archived = new Set<string>(workspaces.archivedSessionIds as readonly string[])
+      const live = new Map<string, Agent>()
+      for (const agent of ctx.agents.list()) live.set(String(agent.id), agent)
+      const subagents = await subagentSessionIds(ctx)
+      const titles = await readTitlesFile(dshHomePath('storages', 'session_projcache.json'))
       const peers: {
-        id: SessionId; title?: string; status: 'running' | 'idle'; pendingTasks: number;
+        id: SessionId; title?: string; status: 'running' | 'idle' | 'dormant'; pendingTasks: number;
         description?: string; capabilities?: { id: string; label: string }[];
       }[] = []
-      for (const agent of ctx.agents.list()) {
-        if (agent.id === callerId) continue
-        if (archived.has(agent.id)) continue
+      for (const sessionId of workspace.sessionIds) {
+        if (String(sessionId) === String(callerId)) continue
+        if (archived.has(String(sessionId))) continue
         // Subagents answer to their parent through the harness lineage, not
         // to workspace peers.
-        if (agent.session.header.origin === 'subagent') continue
-        if (await resolveWorkspacePath(workspaces, agent) !== workspacePath) continue
-        const pending = ledger.listFor(agent.id).filter(
+        if (subagents.has(String(sessionId))) continue
+        const agent = live.get(String(sessionId))
+        const pending = ledger.listFor(sessionId).filter(
           row => row.status === 'submitted' || row.status === 'working' || row.status === 'input-required',
         )
-        const title = ctx.sessionTitle.get(agent.session)?.title
-        const card = ledger.getCard(agent.id)
+        const card = ledger.getCard(sessionId)
         peers.push({
-          id: agent.id,
-          ...(title !== undefined && title !== '' ? { title } : {}),
-          status: agent.status === 'running' ? 'running' : 'idle',
+          id: sessionId,
+          title: peerTitleOf(ctx, titles, agent, sessionId),
+          status: agent === undefined ? 'dormant' : agent.status === 'running' ? 'running' : 'idle',
           pendingTasks: pending.length,
           ...(card !== undefined ? { description: card.description } : {}),
           ...(card !== undefined && card.capabilities.length > 0
