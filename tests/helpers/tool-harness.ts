@@ -113,15 +113,15 @@ export interface FakeWorkspaceState {
   readonly sessionIds: SessionId[]
 }
 
-/** 最小工作区注册表桩：覆盖 resolveByPath / list / archivedSessionIds。 */
+/** 最小工作区注册表桩：覆盖 resolveByPath / list / archivedSessionIds / archiveSession。 */
 export class FakeWorkspaceRegistry {
-  private readonly archived: readonly SessionId[]
+  private readonly archived: SessionId[]
 
   constructor(
     private readonly workspaces: readonly FakeWorkspaceState[],
     archived: readonly SessionId[] = [],
   ) {
-    this.archived = archived
+    this.archived = [...archived]
   }
 
   get archivedSessionIds(): readonly SessionId[] {
@@ -134,6 +134,11 @@ export class FakeWorkspaceRegistry {
 
   list(): readonly FakeWorkspaceState[] {
     return this.workspaces
+  }
+
+  archiveSession(sessionId: SessionId): Promise<void> {
+    if (!this.archived.includes(sessionId)) this.archived.push(sessionId)
+    return Promise.resolve()
   }
 }
 

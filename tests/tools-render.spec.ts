@@ -556,3 +556,36 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
     expect(text).toContain('use the id, not the title, for create_task/send_note')
   })
 })
+
+describe('archive_member workspace-scoped member visibility (manual archive, one-way)', () => {
+  it('archiving a same-workspace peer removes it from list_peers (and the archive is one-way)', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    let peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
+    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
+
+    const res = await harness.run('archive_member', { member_id: String(SESSION_B) }, SESSION_A) as
+      { memberId: string; archived: boolean }
+    expect(res).toEqual({ memberId: String(SESSION_B), archived: true })
+    peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
+    expect(peers.map(p => p.id)).not.toContain(String(SESSION_B))
+    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_REVIEWER)])
+    // Archive set is append-only: the archived id now reflects the workspace registry.
+    expect(harness.workspaces.archivedSessionIds.map(String)).toContain(String(SESSION_B))
+  })
+
+  it('refuses to archive a session that is not in the caller workspace', async () => {
+    const harness = await newHarness({
+      workspaces: [
+        { path: WORKSPACE, sessionIds: [SESSION_A, SESSION_B] },
+        // A separate workspace owning an unrelated session.
+        { path: 'D:\\other-workspace', sessionIds: ['other-session' as unknown as SessionId] },
+      ],
+    })
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('archive_member', { member_id: 'other-session' }, SESSION_A),
+    ).rejects.toThrow(/not a session of your workspace/)
+  })
+})

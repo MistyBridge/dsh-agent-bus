@@ -2222,6 +2222,57 @@ function assertFlowName(name: string): void {
       return { flowId, name: archivedRes.flow.name, archived }
     },
   }))
+
+  ctx.tools.register(checkedTool({
+    name: 'archive_member',
+    description:
+      'Archive one member session (a peer in your workspace). Archiving is a visibility and '
+      + 'recognition choice: an archived member is hidden from list_peers and is no longer a '
+      + 'deliverable target, so it stops being a peer. The change is one-way (the harness session '
+      + 'archive set is append-only — no unarchive path), so only archive sessions you no longer '
+      + 'want to recognize as peers. It only affects workspace recognition; the session\'s own log is '
+      + 'untouched.',
+    parameters: {
+      member_id: { type: 'string', required: true, description: 'The member session id (peer id from list_peers) to archive.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          memberId: { type: 'string', required: true },
+          archived: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `成员 ${result.memberId} 已归档`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:归档成员', kind: 'other', rawInput: args }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:归档成员', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'archive_member')
+      const caller = ctx.agents.get(callerId)
+      if (caller === undefined) throw new Error('archive_member: the calling session is not a live agent')
+      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+      if (callerWorkspace === undefined) {
+        throw new Error('archive_member: the calling session is not inside a registered workspace')
+      }
+      // The member must belong to the caller's workspace account: only a real
+      // same-workspace session can be hidden from these peers (so a caller
+      // cannot archive an unrelated/other-workspace session).
+      const memberId = String(args.member_id)
+      const inWorkspace = workspaces.list().some(workspace =>
+        workspace.path === callerWorkspace
+        && workspace.sessionIds.some(id => String(id) === memberId))
+      if (!inWorkspace) {
+        throw new Error(`archive_member: session "${memberId}" is not a session of your workspace`)
+      }
+      await workspaces.archiveSession(memberId as SessionId)
+      return { memberId, archived: true }
+    },
+  }))
 }
 
 /** Generate a fresh task id. */

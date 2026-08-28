@@ -37,6 +37,7 @@ export const TOOL_NAMES = [
   'create_member',
   'archive_task',
   'archive_flow',
+  'archive_member',
 ] as const
 
 /** 每个工具的完整说明书，键为 {@link TOOL_NAMES}。 */
@@ -182,6 +183,13 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 鉴权:caller 须在线且在该 flow 的 workspace(工作区成员即可,不限创建者)。
 - 典型用法:整个流程收尾后手动归档;或误归档后恢复。
 - 注意:归档不改变任务状态;flow 的任务仍需逐个自行处理。`,
+
+  archive_member: `archive_member 归档一个成员会话(工作区内的 peer)。
+- 参数:member_id(必, 成员会话 id, 来自 list_peers)。
+- 语义:归档是可见性与识别切换:归档的成员从 list_peers 隐藏、不再是派发目标。仅影响工作区识别,不触碰会话自身日志。注意:该操作是单向的(harness 会话归档集是 append-only,无取消归档路径),因此只归档你不再想识别为 peer 的会话。
+- 鉴权:caller 须在线;目标必须属于 caller 的同工作区 account(workspace.sessionIds),不能归档别处/其它工作区会话。
+- 典型用法:成员完成使命后归档,减少 peer 噪声。
+- 注意:归档不删除会话(durable log 仍在);已归档成员不再能作为 send_note/create_task 目标。`,
 }
 
 /** 常驻系统提示的简短总览(替代原先一次性注入的长文)。 */

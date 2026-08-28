@@ -211,6 +211,8 @@ function maximalValueOf(name: string): unknown {
       return { taskId: 't1', status: 'completed', archived: true }
     case 'archive_flow':
       return { flowId: 'f1', name: 'Flow', archived: true }
+    case 'archive_member':
+      return { memberId: 's1', archived: true }
     case 'update_card':
       return { description: 'desc', capabilities: [{ id: 'code', label: 'Coding' }] }
     case 'tool_help':
