@@ -56,8 +56,13 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { buildDelayedMessage, buildTaskMessage, deliverTask, notifySession } from './delivery.ts'
 import { dispatchOne, dispatchReadyTasks, releaseDependents, resumeStrandedTasks, shouldHeartbeatRedeliver } from './scheduler.ts'
 import { setWakeRoute } from './members/wake.ts'
-import { registerAgentBusTools, type ToolsConfig } from './tools.ts'
-import { USAGE_OVERVIEW } from './tool-docs.ts'
+import {
+  apply as applyToolsPlugin,
+  inject as injectToolsPlugin,
+  name as toolsPluginName,
+  type ToolsConfig,
+} from './tools/index.ts'
+import { USAGE_OVERVIEW } from './tools/tool-docs.ts'
 import { TaskId } from './domain/types.ts'
 
 export const name = 'agent-bus'
@@ -221,14 +226,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const noteActivity = (sessionId: SessionId): void => {
     lastActivity.set(String(sessionId), Date.now())
   }
-  registerAgentBusTools(ctx, resolved, {
-    ledger,
-    workspaces: ctx.workspaceRegistry,
-    limiter,
-    messageLimiter,
-    reports,
-    questions,
-    noteActivity,
+  // Share the runtime deps + tools config with the tools sub-plugin; it reads
+  // them via value services instead of re-constructing or receiving them inline.
+  ctx.provide('agent-bus/deps', { limiter, messageLimiter, reports, questions, noteActivity })
+  ctx.provide('agent-bus/tools-config', resolved)
+  await ctx.plugin({
+    name: toolsPluginName,
+    inject: injectToolsPlugin,
+    apply: applyToolsPlugin,
   })
   registerQuestionBridge(ctx, ledger, questions, {
     questionTimeoutMs: config.questionTimeoutMs ?? 600_000,

@@ -31,7 +31,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { checkedTool } from './checked-tool.ts'
+import { checkedTool } from './tools/checked-tool.ts'
 import { notifySession } from './delivery.ts'
 import type { TaskLedger } from './ledger/ledger.ts'
 import type { TaskId } from './domain/types.ts'

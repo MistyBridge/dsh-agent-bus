@@ -22,9 +22,9 @@
 import { describe, expect, it } from 'vitest'
 import { validateJsonSchemaValue, type JsonSchemaNode, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
-import { checkedTool, ToolOutputMismatchError } from '../src/checked-tool.ts'
-import { TOOL_NAMES as DOC_NAMES } from '../src/tool-docs.ts'
-import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools.ts'
+import { checkedTool, ToolOutputMismatchError } from '../src/tools/checked-tool.ts'
+import { TOOL_NAMES as DOC_NAMES } from '../src/tools/tool-docs.ts'
+import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools/index.ts'
 import { TaskId, type TaskRecord } from '../src/domain/types.ts'
 import {
   SESSION_A,

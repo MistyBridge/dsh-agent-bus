@@ -25,7 +25,7 @@ import type { ReportStore } from '../../src/external.ts'
 import { TaskLedger } from '../../src/ledger/ledger.ts'
 import { QuestionRegistry } from '../../src/question-bridge.ts'
 import { DispatchRateLimiter } from '../../src/rate-limit.ts'
-import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../../src/tools.ts'
+import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../../src/tools/index.ts'
 import { createMemoryCtx, SESSION_A, SESSION_B, SESSION_REVIEWER, WORKSPACE } from './memory-ctx.ts'
 
 /** 假 Agent 的构造选项。cwd 缺省为工作区路径；传 `null` 表示无工作区。 */

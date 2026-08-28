@@ -13,7 +13,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { TOOL_DOCS, TOOL_NAMES, USAGE_OVERVIEW } from '../src/tool-docs.ts'
+import { TOOL_DOCS, TOOL_NAMES, USAGE_OVERVIEW } from '../src/tools/tool-docs.ts'
 import {
   createToolHarness,
   makeAgent,
