@@ -44,7 +44,7 @@ export interface FakeAgentOptions {
 export interface FakeAgent {
   readonly id: SessionId
   readonly status: 'running' | 'idle'
-  readonly session: { header: { cwd?: string; origin?: string } }
+  readonly session: { id: SessionId; header: { cwd?: string; origin?: string } }
   readonly followups: unknown[]
   readonly steers: unknown[]
   followup(message: unknown): void
@@ -66,6 +66,7 @@ export function makeAgent(id: SessionId, options: FakeAgentOptions = {}): FakeAg
     id,
     status: options.status ?? 'running',
     session: {
+      id,
       header: {
         ...(options.cwd === null ? {} : { cwd: options.cwd ?? WORKSPACE }),
         ...(options.origin !== undefined ? { origin: options.origin } : {}),
@@ -149,6 +150,8 @@ export interface ToolHarnessOptions {
   readonly config?: Partial<ToolsConfig>
   readonly workspaces?: readonly FakeWorkspaceState[]
   readonly archived?: readonly SessionId[]
+  /** Per-session title, read by send_note/create_task/reassign_task title resolution. */
+  readonly titles?: Readonly<Record<string, string>>
 }
 
 /** 一个就绪的工具基座：真实 ledger + 捕获的工具定义 + 可执行调用的 run()。 */
@@ -162,6 +165,8 @@ export interface ToolHarness {
   readonly messageLimiter: DispatchRateLimiter
   /** 工具注册用的最小 ctx 桩（含 agents 注册表），供 notifySession/flush 等直测。 */
   readonly ctx: Context
+  /** Register (or clear) a session's title, read by title-based target resolution. */
+  setTitle(sessionId: SessionId, title: string | undefined): void
   /** 以 caller 身份调用已注册工具的真实 execute 体。 */
   run(name: string, args: unknown, callerId: SessionId): Promise<unknown>
   dispose(): Promise<void>
@@ -188,6 +193,8 @@ export async function createToolHarness(options: ToolHarnessOptions = {}): Promi
   )
   const limiter = new DispatchRateLimiter(config.maxSendsPerMinute, 60_000)
   const messageLimiter = new DispatchRateLimiter(config.maxMessagesPerMinute, 60_000)
+  // 标题面：title 解析走 session 上的 id(见 makeAgent)。缺省无标题。
+  const titles = new Map(Object.entries(options.titles ?? {}))
   // 本套件不调用报告存储；桩保持类型兼容即可。
   const reports = {
     save: async () => '',
@@ -203,7 +210,12 @@ export async function createToolHarness(options: ToolHarnessOptions = {}): Promi
       },
     },
     agents,
-    sessionTitle: { get: () => undefined },
+    sessionTitle: {
+      get: (session: { id: SessionId }) => {
+        const title = titles.get(String(session.id))
+        return title === undefined ? undefined : { title }
+      },
+    },
     emit: () => {},
     get: () => undefined,
     effect: () => () => {},
@@ -228,6 +240,10 @@ export async function createToolHarness(options: ToolHarnessOptions = {}): Promi
     limiter,
     messageLimiter,
     ctx,
+    setTitle(sessionId, title) {
+      if (title === undefined) titles.delete(String(sessionId))
+      else titles.set(String(sessionId), title)
+    },
     async run(name, args, callerId) {
       const def = tools.get(name)
       if (def === undefined) throw new Error(`tool "${name}" is not registered in the harness`)

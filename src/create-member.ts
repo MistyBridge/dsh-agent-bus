@@ -92,6 +92,8 @@ export interface OnboardPlan {
   readonly description?: string
   /** Non-fatal notices accumulated during parsing (mcp / modules). */
   readonly warnings: readonly string[]
+  /** Provider for the created agent, resolved from the caller; the request route needs it. */
+  readonly provider?: string
   /** Model for the created agent, resolved from the caller; supplies `{{model}}`. */
   readonly model?: string
 }
@@ -174,6 +176,17 @@ const MEMBER_ROLE_ORDER = PERSONA_ORDER + 1
 
 /** Length cap for the capability-card description, matching the peer card. */
 const DESCRIPTION_MAX = 200
+
+/**
+ * Source label the member's runtime skills are registered with. The skill
+ * registry defaults invocation and provider but NOT `source`, and a definition
+ * whose `source` is undefined later fails `validateDefinition` when the member
+ * loads the skill — so every runtime skill must carry a string source.
+ */
+const SKILL_SOURCE = 'runtime'
+
+/** Kebab-case skill-name grammar, mirroring the skill registry's own rule. */
+const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 /** Workspace ids are uuids; anything else is treated as a path. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -345,6 +358,39 @@ async function resolveWorkspace(
   }
 }
 
+/** The registration object handed to `ctx.skills.register`. */
+interface SkillRegistrationLike {
+  readonly name: string
+  readonly description: string
+  readonly content: string
+  readonly source: string
+}
+
+/** Build the registration `ctx.skills.register` expects, pinning a stable source. */
+function toSkillRegistration(spec: SkillSpec): SkillRegistrationLike {
+  return {
+    name: spec.name,
+    description: spec.description,
+    content: spec.content,
+    source: SKILL_SOURCE,
+  }
+}
+
+/** Fail fast when a runtime skill cannot be registered or later loaded. */
+function validateSkillRegistration(skill: SkillRegistrationLike): void {
+  if (!SKILL_NAME_RE.test(skill.name)) {
+    throw new Error(
+      `create_member: field "skills" has invalid name "${skill.name}"; skill names are lowercase kebab-case`,
+    )
+  }
+  if (skill.description.trim() === '') {
+    throw new Error(`create_member: field "skills" skill "${skill.name}" requires a description`)
+  }
+  if (typeof skill.source !== 'string') {
+    throw new Error(`create_member: field "skills" skill "${skill.name}" requires a string source`)
+  }
+}
+
 /**
  * Build the agent-factory `setup` that composes the member's scoped world.
  *
@@ -354,11 +400,21 @@ async function resolveWorkspace(
  * missing required service (systemPrompt for role, skills registry for
  * skills) fails loud inside setup, which rolls the whole creation back.
  *
+ * Runtime skills are preflight-validated here, before the setup runs, so a
+ * malformed skill name refuses at creation time instead of when the member
+ * later loads the skill.
+ *
  * @param host - the host port.
  * @param plan - the validated plan.
  * @returns the setup callback for `agents.create`.
  */
 export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx: Context) => Promise<void> {
+  // Preflight the runtime skills (name grammar, description, source) before
+  // returning the setup so a bad skill fails at create_member time rather than
+  // when the member loads it.
+  const skillRegistrations = plan.skills?.map(toSkillRegistration) ?? []
+  for (const registration of skillRegistrations) validateSkillRegistration(registration)
+
   return async (agentCtx) => {
     if (host.agentPresets !== undefined) {
       await host.agentPresets.mount(agentCtx)
@@ -374,13 +430,13 @@ export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx
     }
     if (plan.skills !== undefined && plan.skills.length > 0) {
       const skills = agentCtx.get('skills') as
-        | { register(skill: SkillSpec): () => void }
+        | { register(skill: SkillRegistrationLike): () => void }
         | undefined
       if (skills === undefined) {
         throw new Error('create_member: field "skills" needs the skills service, which this deployment does not compose')
       }
-      for (const spec of plan.skills) {
-        skills.register({ name: spec.name, description: spec.description, content: spec.content })
+      for (const registration of skillRegistrations) {
+        skills.register(registration)
       }
     }
   }
@@ -508,9 +564,15 @@ async function runOnboarding(
         cwd: workspace.path,
         ...(host.agentPresets !== undefined ? { agentPreset: host.agentPresets.defaultId } : {}),
       },
-      // `{{model}}` reads agent.options.model; without a value the persona
-      // section fails to render, so pin the caller's model on the new agent.
-      ...(plan.model !== undefined ? { agentOptions: { model: plan.model } } : {}),
+      // `{{model}}` reads agent.options.model and the request build needs a
+      // provider route; without both the new agent fails at request build, so
+      // pin the caller's provider+model onto it.
+      ...(plan.model !== undefined || plan.provider !== undefined
+        ? { agentOptions: {
+            ...(plan.provider !== undefined ? { provider: plan.provider } : {}),
+            ...(plan.model !== undefined ? { model: plan.model } : {}),
+          } }
+        : {}),
       setup: buildSetup(host, plan),
     })
   } catch (error) {

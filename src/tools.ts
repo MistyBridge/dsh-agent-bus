@@ -289,6 +289,62 @@ function requireCaller(agent: { id: SessionId } | undefined, tool: string): Sess
 }
 
 /**
+ * Resolve a peer target that may be either a session id or a peer title.
+ *
+ * `send_note` / `create_task` / `reassign_task` accept a target the caller
+ * read from `list_peers`, which prints both the peer's title and its session
+ * id. Resolution runs before authorization so the authorize* functions always
+ * receive a concrete session id: an exact id match within the caller's
+ * workspace wins first; otherwise the value is matched by title among the
+ * live peers of the caller's workspace (the same title source `list_peers`
+ * renders). A title that names more than one peer is refused as ambiguous —
+ * the id is the unambiguous handle. An unmatched value is returned unchanged
+ * so the authorize* gate still produces its workspace-membership refusal.
+ *
+ * @param ctx - plugin context carrying the live agent and title registries.
+ * @param workspaces - the workspace registry service.
+ * @param callerId - the session claiming to act.
+ * @param value - the raw target value from the tool arguments.
+ * @returns the resolved session id.
+ */
+async function resolvePeerTarget(
+  ctx: Context,
+  workspaces: WorkspaceRegistry,
+  callerId: SessionId,
+  value: string,
+): Promise<SessionId> {
+  const caller = ctx.agents.get(callerId)
+  if (caller === undefined) {
+    throw new Error('the calling session is not a live agent')
+  }
+  const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+  if (callerWorkspace === undefined) {
+    throw new Error('the calling session is not inside a registered workspace, so it has no reachable peers')
+  }
+
+  const inCallerWorkspace = workspaces.list().some(workspace =>
+    workspace.path === callerWorkspace
+    && workspace.sessionIds.some(id => String(id) === value))
+  if (inCallerWorkspace) return value as SessionId
+
+  const matches: SessionId[] = []
+  for (const agent of ctx.agents.list()) {
+    if (String(agent.id) === String(callerId)) continue
+    if (agent.session.header.origin === 'subagent') continue
+    if (await resolveWorkspacePath(workspaces, agent) !== callerWorkspace) continue
+    const title = ctx.sessionTitle.get(agent.session)?.title
+    if (title !== undefined && title !== '' && title === value) matches.push(agent.id)
+  }
+  if (matches.length === 0) return value as SessionId
+  if (matches.length > 1) {
+    throw new Error(
+      `target "${value}" is ambiguous: it matches ${matches.length} peers in your workspace; use the id from list_peers`,
+    )
+  }
+  return matches[0]!
+}
+
+/**
  * Wake one session with a task notice.
  *
  * This is the loop-closing step of the lifecycle: report notifies the
@@ -393,7 +449,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       render: (_args, peers) => [{
         type: 'text',
         text: peers.length === 0
-          ? '(no reachable peers in this workspace)'
+          ? 'no reachable peers — use create_member to create a peer session, or confirm your workspace.'
           : peers.map(p => {
             const name = p.title !== undefined && p.title !== '' ? p.title : p.id
             const caps = Array.isArray(p.capabilities) && p.capabilities.length > 0
@@ -403,7 +459,8 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
               ? ` — ${p.description.slice(0, 60)}`
               : ''
             return `${name} [${p.status}] pending=${String(p.pendingTasks)}${caps}${desc} (${p.id})`
-          }).join('\n'),
+          }).join('\n')
+            + '\n(target: use the id, not the title, for create_task/send_note — the id is unambiguous)',
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'agent-bus:发现 peer', kind: 'other' }),
@@ -461,7 +518,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
       + 'needs no lifecycle, and a task channel whose work was really a chat is how tasks get '
       + 'stuck forever in working.',
     parameters: {
-      target: { type: 'string', required: true, description: 'Session id of the peer, from list_peers.' },
+      target: { type: 'string', required: true, description: 'Session id or peer title of the recipient, from list_peers.' },
       content: { type: 'string', required: true, description: 'The note text.' },
     },
     output: {
@@ -492,7 +549,7 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
           `message rate exceeded: at most ${config.maxMessagesPerMinute} messages per minute`,
         )
       }
-      const targetId = args.target as SessionId
+      const targetId = await resolvePeerTarget(ctx, workspaces, callerId, String(args.target))
       // Notes are durable (v1.5): the recipient may be offline — the note is
       // queued and delivered when the recipient is live again. The looser
       // authorization still confines recipients to the caller's workspace.
@@ -680,11 +737,11 @@ function assertFlowName(name: string): void {
       task_id: { type: 'string', required: true, description: 'The unsettled task to reassign.' },
       new_executor: {
         type: 'string',
-        description: 'Session id of the new executor, from list_peers; omit to keep the current one.',
+        description: 'Session id or peer title of the new executor, from list_peers; omit to keep the current one.',
       },
       new_reviewer: {
         type: 'string',
-        description: 'Session id of the new reviewer; omit to keep the current one.',
+        description: 'Session id or peer title of the new reviewer, from list_peers; omit to keep the current one.',
       },
     },
     output: {
@@ -720,12 +777,13 @@ function assertFlowName(name: string): void {
       }
       let newExecutor: SessionId | undefined
       if (args.new_executor !== undefined) {
-        const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, args.new_executor as SessionId)
+        const executorId = await resolvePeerTarget(ctx, workspaces, callerId, String(args.new_executor))
+        const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, executorId)
         if (!decision.ok) throw new Error(decision.message)
-        newExecutor = args.new_executor as SessionId
+        newExecutor = executorId
         // Self-execution keeps an independent reviewer, same rule as create_task.
         const effectiveReviewer = args.new_reviewer !== undefined
-          ? args.new_reviewer as SessionId
+          ? await resolvePeerTarget(ctx, workspaces, callerId, String(args.new_reviewer))
           : task.assignedReviewer
         if (newExecutor === callerId
           && (effectiveReviewer === undefined || effectiveReviewer === callerId)) {
@@ -736,9 +794,10 @@ function assertFlowName(name: string): void {
       }
       let newReviewer: SessionId | undefined
       if (args.new_reviewer !== undefined) {
-        const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, args.new_reviewer as SessionId)
+        const reviewerId = await resolvePeerTarget(ctx, workspaces, callerId, String(args.new_reviewer))
+        const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, reviewerId)
         if (!decision.ok) throw new Error(decision.message)
-        newReviewer = args.new_reviewer as SessionId
+        newReviewer = reviewerId
       }
       const oldExecutor = task.assignedTo
       const wasWorking = task.status === 'working' || task.status === 'input-required'
@@ -932,7 +991,7 @@ function assertFlowName(name: string): void {
       + 'notes (priority channel); pass mode=followup to queue FIFO behind everything already pending. '
       + 'For a multi-step effort, use create_flow instead and build the DAG.',
     parameters: {
-      target: { type: 'string', required: true, description: 'Session id of the peer, from list_peers.' },
+      target: { type: 'string', required: true, description: 'Session id or peer title of the executor, from list_peers.' },
       content: { type: 'string', required: true, description: 'The task instruction or answer.' },
       title: { type: 'string', required: true, description: 'Short display title (1–20 chars); lists and DAG nodes display it.' },
       mode: {
@@ -995,7 +1054,7 @@ function assertFlowName(name: string): void {
           `dispatch rate exceeded: at most ${config.maxSendsPerMinute} sends per minute`,
         )
       }
-      const targetId = args.target as SessionId
+      const targetId = await resolvePeerTarget(ctx, workspaces, callerId, String(args.target))
       const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, targetId)
       if (!decision.ok) throw new Error(decision.message)
 
@@ -1045,9 +1104,10 @@ function assertFlowName(name: string): void {
       const taskId = TaskId(randomTaskId())
       let reviewer: SessionId | undefined
       if (args.reviewer !== undefined) {
-        const reviewerDecision = await authorizePeerOrDormant(ctx, workspaces, callerId, args.reviewer as SessionId)
+        const reviewerId = await resolvePeerTarget(ctx, workspaces, callerId, String(args.reviewer))
+        const reviewerDecision = await authorizePeerOrDormant(ctx, workspaces, callerId, reviewerId)
         if (!reviewerDecision.ok) throw new Error(reviewerDecision.message)
-        reviewer = args.reviewer as SessionId
+        reviewer = reviewerId
       }
       // Self-execution keeps accountability: when the caller is also the
       // executor, the reviewer MUST be a different session — nobody approves
@@ -1952,13 +2012,19 @@ function assertFlowName(name: string): void {
         agentPresets: ctx.get('agentPresets') as PresetMountHost | undefined,
         ledger,
       }
-      // The new agent renders `{{model}}` from its options.model; default it to
-      // the caller's model so the member session can assemble its persona.
-      const callerModel = (caller as { options?: { model?: string } }).options?.model
-      const modelForMember = callerModel !== undefined
-        ? { ...parsed.plan, model: callerModel }
+      // The new agent renders `{{model}}` from options.model and the request
+      // build needs a provider route; default both from the caller so the
+      // member session can assemble its persona and resolve the model adapter.
+      const callerRoute = (caller as { options?: { provider?: string; model?: string } }).options
+      const routeForMember = callerRoute !== undefined
+        && (callerRoute.provider !== undefined || callerRoute.model !== undefined)
+        ? {
+            ...parsed.plan,
+            ...(callerRoute.provider !== undefined ? { provider: callerRoute.provider } : {}),
+            ...(callerRoute.model !== undefined ? { model: callerRoute.model } : {}),
+          }
         : parsed.plan
-      const result = await onboardMember(host, modelForMember)
+      const result = await onboardMember(host, routeForMember)
       // The output schema infers mutable string arrays; copy the readonly
       // result fields so the return is assignable under any inference variant.
       return { ...result, steps: [...result.steps], warnings: [...result.warnings] }

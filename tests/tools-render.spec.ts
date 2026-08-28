@@ -479,3 +479,33 @@ describe('renderTaskDetail', () => {
     expect(without).not.toContain('to:')
   })
 })
+
+describe('list_peers render guidance', () => {
+  it('empty output tells the caller to create a member or confirm the workspace', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    const peers = await harness.run('list_peers', {}, SESSION_A)
+    expect(peers).toEqual([])
+    const render = harness.tools.get('list_peers')!.output.render as
+      (args: unknown, value: unknown) => { type: string; text: string }[]
+    const text = render({}, peers)[0]!.text
+    expect(text).toContain('no reachable peers')
+    expect(text).toContain('create_member')
+    expect(text).toContain('confirm your workspace')
+  })
+
+  it('renders the peer id as the target value and notes id over title', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.setTitle(SESSION_B, 'Quant Strategy')
+    const peers = await harness.run('list_peers', {}, SESSION_A)
+    expect(peers).toHaveLength(1)
+    const render = harness.tools.get('list_peers')!.output.render as
+      (args: unknown, value: unknown) => { type: string; text: string }[]
+    const text = render({}, peers)[0]!.text
+    expect(text).toContain('Quant Strategy')
+    expect(text).toContain(`(${String(SESSION_B)})`)
+    expect(text).toContain('use the id, not the title, for create_task/send_note')
+  })
+})

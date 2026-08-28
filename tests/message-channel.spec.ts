@@ -495,3 +495,70 @@ describe('offline notes (durable queue, v1.5)', () => {
     expect(harness.ledger.listPendingNotes()).toHaveLength(50)
   })
 })
+
+describe('peer target resolution by title (id-or-name)', () => {
+  it('send_note resolves a peer title to its session id and delivers', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.setTitle(SESSION_B, 'Quant Strategy')
+
+    const result = await harness.run(
+      'send_note', { target: 'Quant Strategy', content: 'hello' }, SESSION_A,
+    ) as NoteResult
+    expect(result.delivered).toBe(true)
+    const delivered = harness.agents.get(SESSION_B)!.followups[0]
+    expect(textOf(delivered)).toContain('\nhello')
+  })
+
+  it('create_task resolves a peer title to its session id and records the executor', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.setTitle(SESSION_B, 'Quant Strategy')
+
+    const result = await harness.run(
+      'create_task', { target: 'Quant Strategy', content: 'do it', title: 'Do it' }, SESSION_A,
+    ) as { taskId: string }
+    expect(result.taskId).toMatch(/^[0-9a-f]{8}-/)
+    const row = harness.ledger.get(TaskId(result.taskId))
+    expect(row?.assignedTo).toBe(SESSION_B)
+    expect(harness.agents.get(SESSION_B)!.steers).toHaveLength(1)
+  })
+
+  it('reassign_task resolves a new_executor title to its session id', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.agents.add(makeAgent(SESSION_REVIEWER))
+    harness.setTitle(SESSION_REVIEWER, 'Reviewer Peer')
+    await harness.ledger.record(makeNewTask({ id: TaskId('r-1') }), 8)
+
+    const result = await harness.run(
+      'reassign_task', { task_id: 'r-1', new_executor: 'Reviewer Peer' }, SESSION_A,
+    ) as { taskId: string; status: string; executor?: string }
+    expect(result.executor).toBe(String(SESSION_REVIEWER))
+    expect(harness.ledger.get(TaskId('r-1'))?.assignedTo).toBe(SESSION_REVIEWER)
+  })
+
+  it('a title matching multiple peers is refused as ambiguous', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.agents.add(makeAgent(SESSION_REVIEWER))
+    harness.setTitle(SESSION_B, 'Dupe')
+    harness.setTitle(SESSION_REVIEWER, 'Dupe')
+
+    await expect(
+      harness.run('send_note', { target: 'Dupe', content: 'hi' }, SESSION_A),
+    ).rejects.toThrow(/ambiguous/)
+  })
+
+  it('an unknown title falls through to the workspace-membership refusal', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('send_note', { target: 'nobody by this name', content: 'hi' }, SESSION_A),
+    ).rejects.toThrow('is not a session of your workspace')
+  })
+})

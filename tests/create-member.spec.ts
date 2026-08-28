@@ -390,8 +390,8 @@ describe('onboardMember', () => {
       order: PERSONA_ORDER + 1,
       text: 'analyst',
     })
-    expect(agentCtx.registerSkill).toHaveBeenNthCalledWith(1, { name: 'a', description: 'desc a', content: 'body' })
-    expect(agentCtx.registerSkill).toHaveBeenNthCalledWith(2, { name: 'b', description: 'desc b', content: 'body' })
+    expect(agentCtx.registerSkill).toHaveBeenNthCalledWith(1, { name: 'a', description: 'desc a', content: 'body', source: 'runtime' })
+    expect(agentCtx.registerSkill).toHaveBeenNthCalledWith(2, { name: 'b', description: 'desc b', content: 'body', source: 'runtime' })
     // 基线 preset 在 setup 内先 mount。
     expect(m.mount).toHaveBeenCalledTimes(1)
   })
@@ -571,6 +571,23 @@ describe('onboardMember setup guards', () => {
     const m = makeHost()
     const setup = buildSetup(m.host, plan({ skills: [skill()] }))
     await expect(setup({ get: () => undefined } as unknown as Context)).rejects.toThrow(/skills/)
+  })
+
+  it('refuses an invalid skill name during buildSetup preflight', () => {
+    const m = makeHost()
+    expect(() => buildSetup(m.host, plan({
+      skills: [{ name: 'Bad Name', description: 'shows', content: 'body' }],
+    }))).toThrow(/kebab-case/)
+  })
+
+  it('refuses an invalid skill name at create_member time, creating nothing', async () => {
+    const m = makeHost()
+    const error = await onboardMember(m.host, plan({
+      skills: [{ name: 'Bad Name', description: 'shows', content: 'body' }],
+    })).catch((caught: unknown) => caught)
+    expect(String(error)).toContain('create-session')
+    expect(String(error)).toContain('nothing was created')
+    expect(m.create).not.toHaveBeenCalled()
   })
 })
 
