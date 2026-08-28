@@ -20,10 +20,13 @@ export const TOOL_NAMES = [
   'wake_member',
   'send_note',
   'create_flow',
+  'create_batch',
   'rename_flow',
   'reassign_task',
   'submit_handoff',
   'list_flows',
+  'list_batches',
+  'list_batch',
   'create_task',
   'edit_task',
   'list_tasks',
@@ -76,6 +79,13 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 路由:多步/多交付物或需并行开发的工作优先 create_flow 组织,而非 fire-and-forget 的一次性 subagent——持久、DAG 调度、按任务验收。
 - 注意:一个 flow 就是一个 DAG;流程内全部任务结算后该 flow 归档。`,
 
+  create_batch: `create_batch(BATCH 通道)一次建一个轻量批次——若干相关交付物,介于 create_task(单交付)与 create_flow(完整 DAG)之间。一条命令给多个 peer 各派一个可验收交付物,或给同一 peer 一组相关工作;共享一个 batch id,不建依赖图。
+- 参数:deliverables(必, ≥1, 每项 { target(必, 执行方), content(必, ≤maxContentLength), title(可选, 1–20, 缺省取 content 前 20 字), acceptance_criteria(可选, ≤2000), reviewer(可选, 验收方, 默认 initiator) }), name(可选, 批次标签 ≤20, 缺省取首个交付物标题)。
+- 语义:每个交付物成为一条普通任务,立即投递(wake-on-delivery),走 report→settle 逐项验收。无依赖,故无调度/DAG 开销。self-execution(target=caller)须指定独立 reviewer(同 create_task)。整批可 list_batch 查看、逐项 settle_task 验收;list_batches 列出工作区所有批次。
+- 鉴权:每个 deliverable 的 target 走 authorizePeerOrDormant——caller 在线且在工作区;target 为同工作区会话(可 dormant);subagent 不可派发。每 target 的 pending 上限(maxPendingPerAgent)整批预检,超限拒绝。
+- 典型用法:把一个多交付协作一次性扇出给多个工人,每组相关交付无需建 DAG;比 create_task 逐条建、比 create_flow 轻。
+- 注意:批内任务全部独立(无先后依赖);排队/唤醒失败的退回 queued,由 backstop sweep 补投。`,
+
   rename_flow: `rename_flow 重命名一个 flow(可选替换其说明)。
 - 参数:flow_id(必), name(必, ≤20 字符, 简明概括任务组核心内容), description(可选——传空串清空、省略保留现状)。
 - 语义:新名须在该 workspace 唯一——撞已有 flow 名会被拒,并在报错里列出已有名。
@@ -99,6 +109,18 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 返回:每项 { id, name, description?, taskCount, unsettledCount, archived }。unsettledCount = 未结算任务数;archived = 手动归档标记(archive_flow 设置,永不自动派生)。
 - 鉴权:caller 须在线且在工作区;仅返回同 workspace 的 flow。
 - 典型用法:查看有哪些流程、各自有多少任务/未结算、是否已归档;配合 create_task(flow_id) 向流程加活。`,
+
+  list_batches: `list_batches 列出你工作区的轻量批次(create_batch 建,无 DAG,只为把相关交付归为一组)。
+- 参数:无。
+- 返回:每项 { id, name, createdAt, taskCount, unsettledCount }。taskCount = 该批次的全部任务数;unsettledCount = 未结算数(submitted/working/input-required/completed 待验收)。
+- 鉴权:caller 须在线且在工作区;仅返回同 workspace 的批次。
+- 典型用法:发现你(或同伴)建过的批次;配合 list_batch(batch_id) 展开某批次的全部任务。`,
+
+  list_batch: `list_batch 把一个批次当作整体读出来:批次头(id/name/createdBy/createdAt)+ 其全部任务行(创建顺序)。
+- 参数:batch_id(必, 来自 create_batch 或 list_batches)。
+- 语义:每个任务仍单独以 settle_task 验收;这里只是整批一览。活动任务仅参与者可见(canReadTask, 同 get_task 规则),completed/失败终态公开。
+- 鉴权:caller 须在线且在该批次的 workspace(工作区成员即可);跨工作区拒绝;未知 batch id 拒绝。
+- 典型用法:批量创建后整批查看进度;验收前后复盘一组相关交付。`,
 
   create_task: `create_task(MEDIUM)建一个任务节点给 live peer:一份必须产生可验收结果的工作。对方逐个执行其被派发的任务(每任务自己一轮),你无需控制节奏。
 - 参数:target(必, 执行方, 来自 list_peers), content(必, 任务说明 ≤maxContentLength), title(必, 1–20), mode(可选 'followup'|'steer', 默认 'steer'=优先级通道,先于任何待认领 note;显式 'followup' 则 FIFO 排在已有消息后), reviewer(可选, 验收方, 默认 initiator), task_id(可选——回答对方 request_input 用), dependencies(可选数组, 前置任务 id), acceptance_criteria(可选, 最低验收线 ≤2000), flow_id(可选)。
@@ -214,11 +236,14 @@ export const USAGE_OVERVIEW = `You share a workspace with other agent sessions a
 ROUTE BY SCOPE — pick the channel that matches how big the ask is:
 - SMALL (a message, a question, a confirmation, a one-line ping): send_note. No record, no lifecycle, no acceptance — the peer just answers in prose.
 - MEDIUM (one deliverable the peer must produce and you will verify): create_task. Full lifecycle: report → settle → rework/cancel, with timeout backstop.
+- BATCH (several related deliverables, no ordering): create_batch. One call fans out tasks that each still report → settle per item; view as a whole with list_batch.
 - LARGE (a multi-step effort that needs planning and ordering): create_flow. FIRST write out the full plan (what must happen, in what order, by whom), THEN create the flow, then split the plan into tasks created with flow_id and dependencies so the DAG auto-schedules: each task delivers only after its predecessors settle, and a failure propagates down the chain automatically. The flow is your roadmap; the DAG view renders it.
 Never use a heavier channel than the ask needs, and never a lighter one: chat-as-task is how tasks get stuck forever in working; task-as-chat loses the lifecycle that keeps work accountable.
 
 ROUTING PREFERENCE — prefer agent-bus for work you would otherwise fan out: durable and reviewable, not a fire-and-forget subagent:
-- LARGE / multi-step / multi-deliverable, or parallel work with subdeliverables → create_flow (+ create_task with flow_id + dependencies): durable, DAG-scheduled, reviewable per task.- Peer / team collaboration, shared-workspace work, anything that should be visible and accepted → agent-bus.
+- LARGE / multi-step / multi-deliverable, or parallel work with subdeliverables → create_flow (+ create_task with flow_id + dependencies): durable, DAG-scheduled, reviewable per task.
+- A set of related deliverables with no dependency ordering → create_batch (+ list_batch, settle_task per item): durable, no DAG overhead, reviewable per item.
+- Peer / team collaboration, shared-workspace work, anything that should be visible and accepted → agent-bus.
 - Only one-shot, no-persistence, independent-context delegation → the harness subagent tool.
 
 Incoming agent-bus messages open with a header naming the request kind, so read it first:

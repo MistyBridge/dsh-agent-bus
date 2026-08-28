@@ -158,6 +158,27 @@ export interface FlowRecord {
   readonly archived?: boolean
 }
 
+/**
+ * One lightweight batch: a named group of related deliverables created by a
+ * single `create_batch` call (report 4.2). Unlike a flow it carries no DAG —
+ * every task in the batch is independent and delivers immediately; the batch
+ * only groups them so the whole set can be viewed (list_batch) and each item
+ * settled individually (settle_task). Membership lives on the task rows
+ * (`TaskRecord.batchId`), so this header is the only separately-stored part.
+ */
+export interface BatchRecord {
+  /** Opaque batch identity, returned by `create_batch`. */
+  readonly id: string
+  /** Concise batch label (≤20 chars). */
+  readonly name: string
+  /** The session that created the batch (its dispatcher). */
+  readonly createdBy: SessionId
+  /** Canonical workspace path the batch lives in. */
+  readonly workspacePath: string
+  /** ISO-8601 creation stamp. */
+  readonly createdAt: string
+}
+
 /** One option of a structured question; structurally equal to the official
  * `ask_user_question` option (`{ label, description? }`), defined here so the
  * out-of-repo plugin carries no runtime dependency on the tool package. */
@@ -262,6 +283,9 @@ export interface TaskRecord {
   readonly acceptanceCriteria?: string
   /** Owning flow id (v1.4); dependencies must stay inside the same flow. */
   readonly flowId?: string
+  /** Owning lightweight batch id (report 4.2); a batch groups independent
+   * deliverables, not a DAG. */
+  readonly batchId?: string
   /** Handoff documents from settled predecessors; dispatched with the task. */
   readonly handoffs?: readonly HandoffEntry[]
   /** Manual archive marker; archiving is a user action, never automatic. */

@@ -166,6 +166,13 @@ function maximalValueOf(name: string): unknown {
       return { delivered: true, queued: false, messageId: 'm1' }
     case 'create_flow':
       return { flowId: 'f1', name: 'Flow', suggestion: '建议格式:目标 + 阶段,如『电商站上线:Phase 1 基建』' }
+    case 'create_batch':
+      return {
+        batchId: 'b1',
+        name: 'Batch',
+        created: 1,
+        tasks: [{ taskId: 't1', status: 'submitted', to: 's2', title: 'Title' }],
+      }
     case 'rename_flow':
       return { flowId: 'f1', name: 'Flow', description: 'desc' }
     case 'reassign_task':
@@ -181,6 +188,30 @@ function maximalValueOf(name: string): unknown {
         unsettledCount: 1,
         archived: false,
       }]
+    case 'list_batches':
+      return [{
+        id: 'b1',
+        name: 'Batch',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        taskCount: 2,
+        unsettledCount: 1,
+      }]
+    case 'list_batch':
+      return {
+        id: 'b1',
+        name: 'Batch',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        createdBy: 's1',
+        tasks: [{
+          id: 't1',
+          status: 'submitted',
+          to: 's2',
+          title: 'Title',
+          content: 'content',
+          report: 'report',
+          outcome: 'success',
+        }],
+      }
     case 'create_task':
       return { taskId: 't1', status: 'submitted', queuePosition: 1, blockedBy: ['dep-1'] }
     case 'edit_task':

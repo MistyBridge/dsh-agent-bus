@@ -104,6 +104,8 @@ export const taskRecord = z.object({
   acceptanceCriteria: z.string().max(2000).optional(),
   /** Owning flow id (v1.4): dependencies must stay inside the same flow. */
   flowId: z.string().optional(),
+  /** Owning lightweight batch id (report 4.2): groups independent deliverables, not a DAG. */
+  batchId: z.string().optional(),
   /** Handoff documents from settled predecessors (v1.4): dispatched with the task. */
   handoffs: z.array(z.object({
     fromTask: taskId,
@@ -151,6 +153,23 @@ export const flowRecord = z.object({
 export type StoredFlowRecord = z.infer<typeof flowRecord>
 
 /**
+ * Durable shape of one lightweight batch (report 4.2). A batch is a named
+ * group of independent deliverables created in one `create_batch` call; the
+ * tasks carry `batchId` and the group has no DAG edges. The name is the only
+ * separately-stored metadata — membership is derived from the task rows.
+ */
+export const batchRecord = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(20),
+  createdBy: sessionId,
+  workspacePath: z.string(),
+  createdAt: z.string(),
+}).strict()
+
+/** One stored batch, inferred from {@link batchRecord}. */
+export type StoredBatchRecord = z.infer<typeof batchRecord>
+
+/**
  * Durable shape of one pending note: a send_note that could not be
  * delivered because the recipient was offline (v1.5). The delivery sweep
  * retries it once the recipient is live; no acceptance, no receipt.
@@ -188,14 +207,16 @@ export type AgentBusDomainState = z.infer<typeof agentBusDomainState>
  * `pending_messages` table keyed by note id, plus the order singleton.
  * Version 8 adds the flows container (`flows` table, `tasks.flowId`),
  * version 9 adds `tasks.handoffs`, version 10 adds `pending_messages`
- * (durable offline send_note delivery). The version bump invalidates the
- * storage unit — keep a backup of `agent_bus.json` first (v1.3 §6), then
- * bump the version stamp once after upgrading; the ledger migrates
- * pre-release `submitted` rows without a messageId to `queued` at open.
+ * (durable offline send_note delivery), version 11 adds the lightweight
+ * batch container (`batches` table, `tasks.batchId`). The version bump
+ * invalidates the storage unit — keep a backup of `agent_bus.json` first
+ * (v1.3 §6), then bump the version stamp once after upgrading; the ledger
+ * migrates pre-release `submitted` rows without a messageId to `queued` at
+ * open.
  */
 export const agentBusDomainSpec = defineDomain({
   name: 'agent_bus',
-  version: 10,
+  version: 11,
   global: {
     schema: agentBusDomainState,
     initial: { taskIds: [] },
@@ -204,6 +225,7 @@ export const agentBusDomainSpec = defineDomain({
     tasks: domainTable<TaskId, StoredTaskRecord>(taskRecord),
     peers: domainTable<SessionId, StoredPeerCard>(peerCard),
     flows: domainTable<string, StoredFlowRecord>(flowRecord),
+    batches: domainTable<string, StoredBatchRecord>(batchRecord),
     pending_messages: domainTable<string, StoredPendingMessage>(pendingMessageRecord),
   },
 })

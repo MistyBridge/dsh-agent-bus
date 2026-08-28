@@ -26,6 +26,7 @@ import type { DomainGlobal, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import {
   agentBusDomainSpec,
   type AgentBusDomainState,
+  type StoredBatchRecord,
   type StoredFlowRecord,
   type StoredPeerCard,
   type StoredPendingMessage,
@@ -33,6 +34,7 @@ import {
 } from './spec.ts'
 import {
   TaskId,
+  type BatchRecord,
   type DeliveryMode,
   type FlowRecord,
   type HandoffEntry,
@@ -134,6 +136,12 @@ export interface NewTask {
    * references are rejected at write time.
    */
   readonly flowId?: string
+  /**
+   * Owning lightweight batch id (report 4.2). A batch groups independent
+   * deliverables created in one `create_batch` call; unlike a flow it has no
+   * dependency edges, so the field only labels membership.
+   */
+  readonly batchId?: string
 }
 
 /** Maximum number of DAG predecessors one task may declare. */
@@ -272,6 +280,7 @@ export class TaskLedger {
   private table!: KvTable<TaskId, StoredTaskRecord>
   private peers!: KvTable<SessionId, StoredPeerCard>
   private flows!: KvTable<string, StoredFlowRecord>
+  private batches!: KvTable<string, StoredBatchRecord>
   private pendingNotes!: KvTable<string, StoredPendingMessage>
   private global!: DomainGlobal<AgentBusDomainState>
   private chain: Promise<unknown> = Promise.resolve()
@@ -295,6 +304,7 @@ export class TaskLedger {
     ledger.table = domain.table('tasks')
     ledger.peers = domain.table('peers')
     ledger.flows = domain.table('flows')
+    ledger.batches = domain.table('batches')
     ledger.pendingNotes = domain.table('pending_messages')
     ledger.global = domain.global
     await ledger.migrateQueued()
@@ -462,6 +472,7 @@ export class TaskLedger {
         ...(task.dependencies !== undefined ? { dependencies: [...task.dependencies] } : {}),
         ...(task.acceptanceCriteria !== undefined ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
         ...(task.flowId !== undefined ? { flowId: task.flowId } : {}),
+        ...(task.batchId !== undefined ? { batchId: task.batchId } : {}),
       }
       await this.table.put(record.id, record)
       const state = this.global.get()
@@ -729,6 +740,50 @@ export class TaskLedger {
   /** Read one flow. */
   getFlow(id: string): FlowRecord | undefined {
     return this.flows.get(id)
+  }
+
+  /**
+   * Create one lightweight batch header (report 4.2). Unlike a flow, a batch
+   * carries no dependency edges and its name need not be unique within the
+   * workspace — the tasks it groups are independent deliverables created by a
+   * single `create_batch` call. Membership lives on the task rows
+   * (`TaskRecord.batchId`), so this header is only the group's metadata.
+   *
+   * @param id - batch identity (uuid).
+   * @param name - display name, 1–20 characters.
+   * @param createdBy - the creating session.
+   * @param workspacePath - the workspace the batch lives in.
+   * @returns the created batch.
+   */
+  async createBatch(
+    id: string,
+    name: string,
+    createdBy: SessionId,
+    workspacePath: string,
+  ): Promise<BatchRecord> {
+    return this.enqueue(async () => {
+      const record: StoredBatchRecord = {
+        id,
+        name,
+        createdBy,
+        workspacePath,
+        createdAt: new Date().toISOString(),
+      }
+      await this.batches.put(id, record)
+      return record
+    })
+  }
+
+  /** Read one batch. */
+  getBatch(id: string): BatchRecord | undefined {
+    return this.batches.get(id)
+  }
+
+  /** List every batch in one workspace, in creation order. */
+  listBatches(workspacePath: string): BatchRecord[] {
+    return [...this.batches.entries()]
+      .map(([, batch]) => batch)
+      .filter(batch => batch.workspacePath === workspacePath)
   }
 
   /**

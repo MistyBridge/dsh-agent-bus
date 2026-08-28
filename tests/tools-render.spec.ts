@@ -718,3 +718,140 @@ describe('reconfigure_member works on a live peer and refuses invalid targets', 
     ).rejects.toThrow(/systemPrompt/)
   })
 })
+
+describe('create_batch / list_batches / list_batch (report 4.2)', () => {
+  it('fans out one deliverable per peer, delivers each, and records the batch', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.agents.add(makeAgent(SESSION_REVIEWER))
+    const res = await harness.run('create_batch', {
+      name: 'Fan-out',
+      deliverables: [
+        { target: String(SESSION_B), content: 'do A', title: 'A' },
+        { target: String(SESSION_REVIEWER), content: 'do B', title: 'B' },
+      ],
+    }, SESSION_A) as {
+      batchId: string; name: string; created: number
+      tasks: { taskId: string; status: string; to: string; title: string }[]
+    }
+    expect(res.name).toBe('Fan-out')
+    expect(res.created).toBe(2)
+    expect(res.tasks).toHaveLength(2)
+    expect(res.tasks.map(task => task.to).sort())
+      .toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
+    // The batch header is durable and every task carries its batch id.
+    expect(harness.ledger.getBatch(res.batchId)?.name).toBe('Fan-out')
+    for (const task of res.tasks) {
+      expect(harness.ledger.get(TaskId(task.taskId))?.batchId).toBe(res.batchId)
+    }
+    // Both peers received their deliverable (a steer delivery).
+    expect(harness.agents.get(SESSION_B)!.steers).toHaveLength(1)
+    expect(harness.agents.get(SESSION_REVIEWER)!.steers).toHaveLength(1)
+  })
+
+  it('groups multiple deliverables to one peer and derives a label from the first title', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    const res = await harness.run('create_batch', {
+      deliverables: [
+        { target: String(SESSION_B), content: 'one', title: 'Alpha' },
+        { target: String(SESSION_B), content: 'two', title: 'Beta' },
+      ],
+    }, SESSION_A) as { batchId: string; name: string; created: number; tasks: { taskId: string; to: string }[] }
+    expect(res.name).toBe('Alpha')
+    expect(res.created).toBe(2)
+    expect(res.tasks.filter(task => task.to === String(SESSION_B))).toHaveLength(2)
+    expect(harness.agents.get(SESSION_B)!.steers).toHaveLength(2)
+  })
+
+  it('an invalid target refuses the whole batch before any task is created', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    await expect(
+      harness.run('create_batch', {
+        deliverables: [{ target: 'unknown-session', content: 'x', title: 'T' }],
+      }, SESSION_A),
+    ).rejects.toThrow()
+    expect(harness.ledger.listBatches(WORKSPACE)).toHaveLength(0)
+    expect(harness.ledger.listAll()).toHaveLength(0)
+  })
+
+  it('requires at least one deliverable and refuses self-execution without a reviewer', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    await expect(
+      harness.run('create_batch', { deliverables: [] }, SESSION_A),
+    ).rejects.toThrow(/at least one deliverable/)
+    await expect(
+      harness.run('create_batch', {
+        deliverables: [{ target: String(SESSION_A), content: 'self', title: 'Self' }],
+      }, SESSION_A),
+    ).rejects.toThrow(/self-execution requires reviewer/)
+  })
+
+  it('pre-flights the per-recipient pending ceiling before creating anything', async () => {
+    const harness = await newHarness({ config: { maxPendingPerAgent: 1 } })
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    const rec = await harness.ledger.record(makeNewTask({ id: TaskId('busy-1'), assignedTo: SESSION_B }), 1)
+    if (!rec.ok) throw new Error(rec.message)
+    await expect(
+      harness.run('create_batch', {
+        deliverables: [{ target: String(SESSION_B), content: 'extra', title: 'Extra' }],
+      }, SESSION_A),
+    ).rejects.toThrow(/already has 1 unfinished tasks/)
+    expect(harness.ledger.listBatches(WORKSPACE)).toHaveLength(0)
+  })
+
+  it('list_batches lists batches in the workspace with settle counts', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    const created = await harness.run('create_batch', {
+      name: 'Batch A',
+      deliverables: [{ target: String(SESSION_B), content: 'do A', title: 'A' }],
+    }, SESSION_A) as { batchId: string }
+    const listed = await harness.run('list_batches', {}, SESSION_A) as {
+      id: string; name: string; taskCount: number; unsettledCount: number
+    }[]
+    expect(listed).toHaveLength(1)
+    expect(listed[0]!.id).toBe(created.batchId)
+    expect(listed[0]!.name).toBe('Batch A')
+    expect(listed[0]!.taskCount).toBe(1)
+    expect(listed[0]!.unsettledCount).toBe(1)
+  })
+
+  it('list_batch reads a batch as a whole for its initiator', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    const created = await harness.run('create_batch', {
+      name: 'Batch A',
+      deliverables: [{ target: String(SESSION_B), content: 'do A', title: 'A' }],
+    }, SESSION_A) as { batchId: string; tasks: { taskId: string }[] }
+    const detail = await harness.run('list_batch', { batch_id: created.batchId }, SESSION_A) as {
+      id: string; name: string; createdBy: string; tasks: { id: string; status: string; content: string }[]
+    }
+    expect(detail.name).toBe('Batch A')
+    expect(detail.createdBy).toBe(String(SESSION_A))
+    expect(detail.tasks.map(task => task.id)).toEqual([created.tasks[0]!.taskId])
+    expect(detail.tasks[0]!.content).toBe('do A')
+  })
+
+  it('list_batch refuses an unknown id and a batch in another workspace', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    await expect(
+      harness.run('list_batch', { batch_id: 'ghost' }, SESSION_A),
+    ).rejects.toThrow(/no such batch/)
+    await harness.ledger.createBatch('other-batch', 'Other', SESSION_REVIEWER, '/elsewhere')
+    await expect(
+      harness.run('list_batch', { batch_id: 'other-batch' }, SESSION_A),
+    ).rejects.toThrow(/different workspace/)
+  })
+})

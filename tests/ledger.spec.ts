@@ -834,3 +834,32 @@ describe('offline note rows', () => {
     expect(ledger.listPendingNotes().map(note => note.id)).toEqual(['n2'])
   })
 })
+
+describe('batch ledger (report 4.2)', () => {
+  it('createBatch stores a header; getBatch reads it back and an unknown id yields undefined', async () => {
+    const ledger = await openLedger()
+    const batch = await ledger.createBatch('b1', 'Batch A', SESSION_A, WORKSPACE)
+    expect(batch.id).toBe('b1')
+    expect(batch.name).toBe('Batch A')
+    expect(batch.createdBy).toBe(SESSION_A)
+    expect(batch.workspacePath).toBe(WORKSPACE)
+    expect(ledger.getBatch('b1')?.name).toBe('Batch A')
+    expect(ledger.getBatch('ghost')).toBeUndefined()
+  })
+
+  it('listBatches filters by workspace and preserves creation order', async () => {
+    const ledger = await openLedger()
+    await ledger.createBatch('b1', 'First', SESSION_A, WORKSPACE)
+    await ledger.createBatch('b2', 'Second', SESSION_A, WORKSPACE)
+    await ledger.createBatch('b3', 'Other', SESSION_A, '/elsewhere')
+    expect(ledger.listBatches(WORKSPACE).map(batch => batch.id)).toEqual(['b1', 'b2'])
+    expect(ledger.listBatches('/elsewhere').map(batch => batch.id)).toEqual(['b3'])
+  })
+
+  it('a task recorded with a batchId persists the membership field', async () => {
+    const ledger = await openLedger()
+    const created = await ledger.record(makeNewTask({ id: TaskId('bt-1'), batchId: 'b1' }), 8)
+    expectOk(created)
+    expect(ledger.get(TaskId('bt-1'))?.batchId).toBe('b1')
+  })
+})
