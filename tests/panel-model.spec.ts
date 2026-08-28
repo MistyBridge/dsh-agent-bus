@@ -62,7 +62,7 @@ import {
   type TaskView,
   type TokenBuckets,
 } from '../src/client/panel-model.ts'
-import { ARCHIVE_AGE_MS as HOST_ARCHIVE_AGE_MS } from '../src/panel.ts'
+import { ARCHIVE_AGE_MS as HOST_ARCHIVE_AGE_MS } from '../src/web/panel.ts'
 
 const NOW_MS = Date.parse('2026-08-01T00:00:00.000Z')
 const HOUR_MS = 60 * 60_000

@@ -31,7 +31,7 @@ import {
   registerQuestionBridge,
   normalizeQuestionAnswers,
   type PendingAsk,
-} from '../src/question-bridge.ts'
+} from '../src/bridges/question-bridge.ts'
 import { DispatchRateLimiter } from '../src/rate-limit.ts'
 import { registerAgentBusTools, type ToolsConfig, type ToolsDeps } from '../src/tools/index.ts'
 import { TaskId, type PendingQuestion, type QuestionAnswer } from '../src/domain/types.ts'

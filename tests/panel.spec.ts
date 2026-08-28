@@ -26,7 +26,7 @@ import {
   staffRolesOf,
   tokenDeltaOf,
   truncateCodePoints,
-} from '../src/panel.ts'
+} from '../src/web/panel.ts'
 import type { ReportStore } from '../src/external.ts'
 import { ARCHIVE_AGE_MS as CLIENT_ARCHIVE_AGE_MS, isDagArchived } from '../src/client/panel-model.ts'
 import { TaskLedger } from '../src/ledger/ledger.ts'
