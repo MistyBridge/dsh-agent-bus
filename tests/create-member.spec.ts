@@ -28,7 +28,7 @@ import {
   type CreateMemberHost,
   type OnboardPlan,
   type SkillSpec,
-} from '../src/create-member.ts'
+} from '../src/members/create-member.ts'
 import { TaskLedger } from '../src/ledger/ledger.ts'
 import {
   createMemoryCtx,

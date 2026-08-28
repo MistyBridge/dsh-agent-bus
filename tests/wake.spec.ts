@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import { composeWakeSetup, resolveSessionPreset } from '../src/wake.ts'
+import { composeWakeSetup, resolveSessionPreset } from '../src/members/wake.ts'
 
 /** 构造一个最小 header。 */
 function header(overrides: Partial<SessionHeader> = {}): SessionHeader {

@@ -28,18 +28,18 @@ import {
   type CreateMemberHost,
   type PermissionPresetHost,
   type PresetMountHost,
-} from './create-member.ts'
-import { setMemberRole } from './member-config.ts'
+} from './members/create-member.ts'
+import { setMemberRole } from './members/member-config.ts'
 import {
   parseReconfigureMemberInput,
   reconfigureMember,
   type ReconfigureMemberHost,
-} from './reconfigure-member.ts'
+} from './members/reconfigure-member.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { authorizeClaim, authorizeNoteRecipient, authorizePeerOrDormant, authorizeSettlement, authorizeTaskRead, resolveWorkspacePath } from './authorize.ts'
+import { authorizeClaim, authorizeNoteRecipient, authorizePeerOrDormant, authorizeSettlement, authorizeTaskRead, resolveWorkspacePath } from './members/authorize.ts'
 import {
   admitContent,
   buildMessageMessage,
@@ -55,7 +55,7 @@ import { fallbackTitle, readTitlesFile } from './titles.ts'
 import { normalizeQuestionAnswers, type QuestionRegistry } from './question-bridge.ts'
 import { DispatchRateLimiter } from './rate-limit.ts'
 import { dispatchOne } from './scheduler.ts'
-import { wakeSession } from './wake.ts'
+import { wakeSession } from './members/wake.ts'
 import { TaskId, type DeliveryMode, type TaskRecord, type TokenBuckets } from './domain/types.ts'
 
 /** Resolved plugin configuration the tools read. */

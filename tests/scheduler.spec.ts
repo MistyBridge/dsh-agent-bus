@@ -30,8 +30,8 @@ import {
 // wakeSession 是 ESM 命名导出,不能 spy;用模块级 mock 替换实现。
 // 测试基座里没有真实 agents 注册表,唤醒结果由各用例的 wakeResults 表驱动。
 const wakeResults = new Map<string, Agent | undefined>()
-vi.mock('../src/wake.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/wake.ts')>()
+vi.mock('../src/members/wake.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/members/wake.ts')>()
   return {
     ...actual,
     wakeSession: async (_ctx: Context, id: SessionId): Promise<Agent | undefined> =>

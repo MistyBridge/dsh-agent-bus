@@ -43,6 +43,11 @@ import {
   inject as injectLedgerPlugin,
   name as ledgerPluginName,
 } from './ledger/index.ts'
+import {
+  apply as applyMembersPlugin,
+  inject as injectMembersPlugin,
+  name as membersPluginName,
+} from './members/index.ts'
 import { buildPanelSnapshot, type RecoveryInfo, type StaleInfo } from './panel.ts'
 import { installApprovalBridge } from './approval-bridge.ts'
 import { registerQuestionBridge, QuestionRegistry } from './question-bridge.ts'
@@ -50,7 +55,7 @@ import { DispatchRateLimiter } from './rate-limit.ts'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { buildDelayedMessage, buildTaskMessage, deliverTask, notifySession } from './delivery.ts'
 import { dispatchOne, dispatchReadyTasks, releaseDependents, resumeStrandedTasks, shouldHeartbeatRedeliver } from './scheduler.ts'
-import { setWakeRoute } from './wake.ts'
+import { setWakeRoute } from './members/wake.ts'
 import { registerAgentBusTools, type ToolsConfig } from './tools.ts'
 import { USAGE_OVERVIEW } from './tool-docs.ts'
 import { TaskId } from './domain/types.ts'
@@ -181,6 +186,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   setWakeRoute({
     ...(config.wakeProvider !== undefined ? { provider: config.wakeProvider } : {}),
     ...(config.wakeModel !== undefined ? { model: config.wakeModel } : {}),
+  })
+  // Mount the members sub-plugin after the wake-route singleton is set (so its
+  // `wakeSession` always reads the configured fallback route) and the ledger
+  // service is open (the member-host face carries the same `ledger`).
+  // `agent-bus:members` composes the member-host value service and exposes it
+  // as `'agent-bus/member-host'` for the tools phase.
+  await ctx.plugin({
+    name: membersPluginName,
+    inject: injectMembersPlugin,
+    apply: applyMembersPlugin,
   })
   const limiter = new DispatchRateLimiter(resolved.maxSendsPerMinute, 60_000)
   // Separate window for the message channel: chatter must not exhaust the

@@ -24,8 +24,8 @@ import {
   reconfigureMember,
   type ReconfigureMemberHost,
   type ReconfigurePlan,
-} from '../src/reconfigure-member.ts'
-import { setMemberRole } from '../src/member-config.ts'
+} from '../src/members/reconfigure-member.ts'
+import { setMemberRole } from '../src/members/member-config.ts'
 
 /** 最小 live-session 替身:append 记录事件类型,供 setSandboxMode/setApprovalPolicy 观察。 */
 interface FakeSession {

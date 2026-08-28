@@ -39,7 +39,7 @@ import {
   type PermissionKnobs,
   type PermissionPresetHost,
 } from './member-config.ts'
-import type { FlowRecord, PeerCard } from './domain/types.ts'
+import type { FlowRecord, PeerCard } from '../domain/types.ts'
 
 export type { ApprovalPolicy, PermissionKnobs, PermissionPresetHost, SandboxMode } from './member-config.ts'
 export { applyPermissions, MEMBER_ROLE_SECTION } from './member-config.ts'
