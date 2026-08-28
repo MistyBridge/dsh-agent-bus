@@ -32,16 +32,17 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import { PERSONA_ORDER } from '@deepseek-ai/dsh-system-prompt'
-import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
-import { setSandboxMode, SANDBOX_MODES } from '@deepseek-ai/dsh-sandbox-policy'
+import {
+  applyPermissions,
+  parsePermissions,
+  setMemberRole,
+  type PermissionKnobs,
+  type PermissionPresetHost,
+} from './member-config.ts'
 import type { FlowRecord, PeerCard } from './types.ts'
 
-/** The sandbox modes the harness supports, in declaration order. */
-export type SandboxMode = (typeof SANDBOX_MODES)[number]
-
-/** The approval policies the harness supports, in declaration order. */
-export type ApprovalPolicy = 'ask' | 'never'
+export type { ApprovalPolicy, PermissionKnobs, PermissionPresetHost, SandboxMode } from './member-config.ts'
+export { applyPermissions, MEMBER_ROLE_SECTION } from './member-config.ts'
 
 /** One runtime skill definition the new member mounts in its own scope. */
 export interface SkillSpec {
@@ -51,12 +52,6 @@ export interface SkillSpec {
   readonly description?: string
   /** Markdown instruction body; optional when referencing an existing skill by name. */
   readonly content?: string
-}
-
-/** Explicit permission knobs, an alternative to naming a preset. */
-export interface PermissionKnobs {
-  readonly sandbox: SandboxMode
-  readonly approval: ApprovalPolicy
 }
 
 /** The JSON input `create_member` accepts (mirrors the tool parameter schema). */
@@ -130,12 +125,6 @@ export interface PresetMountHost {
   mount(agentCtx: Context, id?: string): Promise<unknown>
 }
 
-/** Minimal permission-presets face used for preset-name permissions. */
-export interface PermissionPresetHost {
-  readonly names: readonly string[]
-  set(session: Session, name: string): void
-}
-
 /**
  * The structural host port the orchestrator drives. Unit tests supply mocks;
  * `tools.ts` wires the live harness services. Every member is optional except
@@ -167,17 +156,6 @@ export interface CreateMemberHost {
     listFlows(): FlowRecord[]
   }
 }
-
-/**
- * The system-prompt section that carries the member's role. A dedicated name
- * (not the persona section) so layering over a default preset that already
- * installed a persona cannot collide — `systemPrompt.section` rejects
- * duplicate names within one scope layer.
- */
-export const MEMBER_ROLE_SECTION = 'agent-bus:member-role'
-
-/** Order of the role section: directly after the persona section. */
-const MEMBER_ROLE_ORDER = PERSONA_ORDER + 1
 
 /** Length cap for the capability-card description, matching the peer card. */
 const DESCRIPTION_MAX = 200
@@ -295,25 +273,9 @@ export function parseCreateMemberInput(raw: unknown, defaultWorkspace?: string):
 
   let permissions: string | PermissionKnobs | undefined
   if (input.permissions !== undefined) {
-    if (typeof input.permissions === 'string') {
-      if (input.permissions.trim() === '') {
-        return refusal('create_member: field "permissions" must be a non-empty preset name')
-      }
-      permissions = input.permissions.trim()
-    } else if (typeof input.permissions === 'object' && input.permissions !== null && !Array.isArray(input.permissions)) {
-      const knobs = input.permissions as Record<string, unknown>
-      if (!SANDBOX_MODES.includes(knobs.sandbox as SandboxMode)) {
-        return refusal(
-          `create_member: field "permissions.sandbox" must be one of ${SANDBOX_MODES.join('|')}`,
-        )
-      }
-      if (knobs.approval !== 'ask' && knobs.approval !== 'never') {
-        return refusal('create_member: field "permissions.approval" must be one of ask|never')
-      }
-      permissions = { sandbox: knobs.sandbox as SandboxMode, approval: knobs.approval as 'ask' | 'never' }
-    } else {
-      return refusal('create_member: field "permissions" must be a preset name or a {sandbox, approval} object')
-    }
+    const parsed = parsePermissions(input.permissions)
+    if (!parsed.ok) return refusal(`create_member: ${parsed.error}`)
+    permissions = parsed.permissions
   }
 
   let flow: string | undefined
@@ -442,9 +404,16 @@ function validateSkillRegistration(skill: SkillRegistrationLike): void {
  *
  * @param host - the host port.
  * @param plan - the validated plan.
+ * @param sessionId - the created member's session id, so the role section's
+ *   disposer is remembered for a later `reconfigure_member`; omitted keeps the
+ *   bare create path (no disposer retention).
  * @returns the setup callback for `agents.create`.
  */
-export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx: Context) => Promise<void> {
+export function buildSetup(
+  host: CreateMemberHost,
+  plan: OnboardPlan,
+  sessionId?: SessionId,
+): (agentCtx: Context) => Promise<void> {
   // Preflight the fully-supplied (inline) skills synchronously before returning
   // the setup so a malformed inline skill name refuses at create_member time
   // rather than when the member later loads the skill. Name-only references
@@ -467,13 +436,7 @@ export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx
       await host.agentPresets.mount(agentCtx)
     }
     if (plan.role !== undefined) {
-      const systemPrompt = agentCtx.get('systemPrompt') as
-        | { section(section: { name: string; order: number; text: string }): () => void }
-        | undefined
-      if (systemPrompt === undefined) {
-        throw new Error('create_member: field "role" needs the systemPrompt service, which this deployment does not compose')
-      }
-      systemPrompt.section({ name: MEMBER_ROLE_SECTION, order: MEMBER_ROLE_ORDER, text: plan.role })
+      setMemberRole(sessionId !== undefined ? String(sessionId) : undefined, agentCtx, plan.role)
     }
     if (plan.skills !== undefined && plan.skills.length > 0) {
       const skills = agentCtx.get('skills') as
@@ -507,29 +470,6 @@ export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx
       }
     }
   }
-}
-
-/** Apply the member's permissions, overriding the creation-time default pin. */
-function applyPermissions(
-  host: CreateMemberHost,
-  session: Session,
-  permissions: string | PermissionKnobs,
-): void {
-  if (typeof permissions === 'string') {
-    const service = host.permissionPresets
-    if (service === undefined) {
-      throw new Error('create_member: field "permissions" needs the permissionPresets service, which this deployment does not compose')
-    }
-    if (!service.names.includes(permissions)) {
-      throw new Error(
-        `create_member: field "permissions" must be one of the preset names (${service.names.join(', ')}); got "${permissions}"`,
-      )
-    }
-    service.set(session, permissions)
-    return
-  }
-  setSandboxMode(session, permissions.sandbox)
-  setApprovalPolicy(session, permissions.approval)
 }
 
 /**
@@ -640,7 +580,7 @@ async function runOnboarding(
             ...(plan.model !== undefined ? { model: plan.model } : {}),
           } }
         : {}),
-      setup: buildSetup(host, plan),
+      setup: buildSetup(host, plan, sessionId),
     })
   } catch (error) {
     // A setup throw is rolled back entirely by the agent factory; there is no

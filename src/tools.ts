@@ -29,6 +29,12 @@ import {
   type PermissionPresetHost,
   type PresetMountHost,
 } from './create-member.ts'
+import { setMemberRole } from './member-config.ts'
+import {
+  parseReconfigureMemberInput,
+  reconfigureMember,
+  type ReconfigureMemberHost,
+} from './reconfigure-member.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -2190,6 +2196,93 @@ function assertFlowName(name: string): void {
       // The output schema infers mutable string arrays; copy the readonly
       // result fields so the return is assignable under any inference variant.
       return { ...result, steps: [...result.steps], warnings: [...result.warnings] }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'reconfigure_member',
+    description:
+      'Reconfigure an existing member (a peer in your workspace) without rebuilding the session: '
+      + 'replace its role and/or its permissions in place. member_id is the member session id from '
+      + 'list_peers. role is the persona-style prose injected as the member\'s system-prompt section; '
+      + 'permissions is a preset name or an explicit {sandbox, approval} knob pair, exactly as in '
+      + 'create_member. The change takes effect on the member\'s next turn (a dormant member is '
+      + 'woken first, then configured). Skill reconfiguration is not supported yet — cancel and '
+      + 'recreate the member to change skills. Use this instead of cancel/recreate when you built the '
+      + 'wrong role or permissions.',
+    parameters: {
+      member_id: { type: 'string', required: true, description: 'The member session id (peer id from list_peers) to reconfigure.' },
+      role: { type: 'string', description: 'Replacement role/persona prose injected as a system-prompt section; takes effect on the member\'s next turn.' },
+      permissions: {
+        oneOf: [
+          {
+            type: 'string',
+            description:
+              'Permission preset name. One of: ' + permissionPresetNamesHint
+              + '. An unknown preset name is refused.',
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              sandbox: { type: 'string', enum: [...SANDBOX_MODES], required: true, description: `Sandbox mode; one of ${SANDBOX_MODES.join('|')}.` },
+              approval: { type: 'string', enum: [...APPROVAL_POLICIES], required: true, description: `Approval policy; one of ${APPROVAL_POLICIES.join('|')}.` },
+            },
+          },
+        ],
+        description:
+          'Preset name, or explicit {sandbox, approval} knobs (sandbox ∈ ['
+          + SANDBOX_MODES.join(', ') + '], approval ∈ [' + APPROVAL_POLICIES.join(', ')
+          + ']); omitted keeps the current permission pin.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          memberId: { type: 'string', required: true },
+          steps: { type: 'array', items: { type: 'string' }, required: true },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `member ${result.memberId.slice(0, 8)} reconfigured (${result.steps.join(' → ')})`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:改配成员', kind: 'other', rawInput: { member_id: args.member_id, ...(args.role !== undefined ? { role: args.role } : {}) } }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:改配成员', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'reconfigure_member')
+      const memberId = String(args.member_id) as SessionId
+      // A member's role/permissions are set by a peer, never by itself: a
+      // worker could otherwise grant itself danger-full-access. The target must
+      // still be a real same-workspace peer (live or dormant) to reach here.
+      if (memberId === callerId) {
+        throw new Error('reconfigure_member: cannot reconfigure the calling session itself')
+      }
+      const caller = ctx.agents.get(callerId)
+      if (caller === undefined) throw new Error('reconfigure_member: the calling session is not a live agent')
+      const callerWorkspace = await resolveWorkspacePath(workspaces, caller)
+      if (callerWorkspace === undefined) {
+        throw new Error('reconfigure_member: the calling session is not inside a registered workspace')
+      }
+      const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, memberId)
+      if (!decision.ok) throw new Error(decision.message)
+      const parsed = parseReconfigureMemberInput(args)
+      if (!parsed.ok) throw new Error(parsed.error)
+      const host: ReconfigureMemberHost = {
+        agents: {
+          get: id => ctx.agents.get(id),
+          resume: async id => wakeSession(ctx, id),
+        },
+        permissionPresets: ctx.get('permissionPresets') as PermissionPresetHost | undefined,
+        setRole: (member, text) => setMemberRole(String(member.id), member.ctx, text),
+      }
+      const result = await reconfigureMember(host, parsed.plan)
+      // The output schema infers mutable string arrays; copy the readonly
+      // result fields so the return is assignable under any inference variant.
+      return { ...result, steps: [...result.steps] }
     },
   }))
 

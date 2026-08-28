@@ -15,6 +15,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import { MEMBER_ROLE_SECTION } from '../src/member-config.ts'
 import { canReadTask, isActiveTask, renderTaskDetail, renderTaskRow } from '../src/tools.ts'
 import { TaskId } from '../src/types.ts'
 import {
@@ -635,5 +637,84 @@ describe('wake_member activates a live peer; refuses a non-peer or archived', ()
     await expect(
       harness.run('wake_member', { member_id: String(SESSION_B) }, SESSION_A),
     ).rejects.toThrow(/archived/)
+  })
+})
+
+describe('reconfigure_member works on a live peer and refuses invalid targets', () => {
+  /** 记录 role section 注册的 agent-ctx。 */
+  function recordingCtx(record: Array<Record<string, unknown>>): Context {
+    return {
+      get: (name: string): unknown =>
+        name === 'systemPrompt'
+          ? { section: (value: Record<string, unknown>) => { record.push(value); return () => {} } }
+          : undefined,
+    } as unknown as Context
+  }
+
+  it('replaces a live member role and reports the steps', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    const sectionCalls: Array<Record<string, unknown>> = []
+    harness.agents.add(makeAgent(SESSION_B, { ctx: recordingCtx(sectionCalls) }))
+    const res = await harness.run(
+      'reconfigure_member',
+      { member_id: String(SESSION_B), role: 'analyst' },
+      SESSION_A,
+    ) as { memberId: string; steps: string[] }
+    expect(res.memberId).toBe(String(SESSION_B))
+    expect(res.steps).toEqual(['role'])
+    expect(sectionCalls).toEqual([{ name: MEMBER_ROLE_SECTION, order: expect.any(Number), text: 'analyst' }])
+  })
+
+  it('refuses a session that is not a peer of the caller workspace', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('reconfigure_member', { member_id: 'other-session', role: 'x' }, SESSION_A),
+    ).rejects.toThrow(/not a session of your workspace/)
+  })
+
+  it('refuses an archived member', async () => {
+    const harness = await newHarness({ archived: [SESSION_B] })
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('reconfigure_member', { member_id: String(SESSION_B), role: 'x' }, SESSION_A),
+    ).rejects.toThrow(/archived/)
+  })
+
+  it('refuses reconfiguring the calling session itself', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('reconfigure_member', { member_id: String(SESSION_A), role: 'x' }, SESSION_A),
+    ).rejects.toThrow(/cannot reconfigure the calling session itself/)
+  })
+
+  it('refuses a dormant member that cannot be woken (no model route)', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('reconfigure_member', { member_id: String(SESSION_B), role: 'x' }, SESSION_A),
+    ).rejects.toThrow(/could not be resolved/)
+  })
+
+  it('refuses a plan that changes nothing', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    await expect(
+      harness.run('reconfigure_member', { member_id: String(SESSION_B) }, SESSION_A),
+    ).rejects.toThrow(/nothing to change/)
+  })
+
+  it('refuses a role on a deployment with no systemPrompt service', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    // A member whose agent ctx does not expose systemPrompt — the live wiring
+    // resolves setRole via agent.ctx, so a role change must refuse cleanly.
+    harness.agents.add(makeAgent(SESSION_B, { ctx: { get: () => undefined } as unknown as Context }))
+    await expect(
+      harness.run('reconfigure_member', { member_id: String(SESSION_B), role: 'x' }, SESSION_A),
+    ).rejects.toThrow(/systemPrompt/)
   })
 })

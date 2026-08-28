@@ -48,7 +48,7 @@ const CONFIG: ToolsConfig = {
   maxMessagesPerMinute: 20,
 }
 
-/** 工具面全集：数量与名字的漂移本身就是回归信号。19 个文档工具来自 tool-docs 的单一事实源，加披露加载器 tool_help。 */
+/** 工具面全集：数量与名字的漂移本身就是回归信号。全部文档工具来自 tool-docs 的单一事实源，加披露加载器 tool_help。 */
 const TOOL_NAMES = [...DOC_NAMES, 'tool_help'] as const
 
 function captureTools(): Map<string, CapturedTool> {
@@ -211,6 +211,8 @@ function maximalValueOf(name: string): unknown {
         warnings: ['a warning'],
         flow: { id: 'f1', name: 'Flow' },
       }
+    case 'reconfigure_member':
+      return { memberId: 's1', steps: ['role', 'permissions'] }
     case 'archive_task':
       return { taskId: 't1', status: 'completed', archived: true }
     case 'archive_flow':
@@ -383,6 +385,36 @@ describe('create_member parameter drift (workspace optional, permissions hint)',
   })
 
   it('declares sandbox/approval knob enums so the model sees legal values', () => {
+    const root = parameterRoot()
+    const oneOf = root.properties.permissions?.oneOf
+    expect(oneOf).toBeDefined()
+    const knobBranch = (oneOf ?? []).find((branch: { type?: string }) => branch.type === 'object')
+    expect(knobBranch).toBeDefined()
+    const knob = knobBranch as { properties: Record<string, { enum?: unknown[] }> }
+    expect(knob.properties.sandbox.enum).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(knob.properties.approval.enum).toEqual(['ask', 'never'])
+  })
+})
+
+describe('reconfigure_member parameter drift (member_id required, role/permissions optional)', () => {
+  /** 编译后的参数 schema：`required` 为顶层数组，`properties` 为各字段 schema。 */
+  function parameterRoot(): { required?: string[]; properties: Record<string, { oneOf?: unknown[] }> } {
+    const tools = captureTools()
+    return tools.get('reconfigure_member')!.parameters as unknown as {
+      required?: string[]; properties: Record<string, { oneOf?: unknown[] }>
+    }
+  }
+
+  it('makes member_id required and role/permissions optional', () => {
+    const root = parameterRoot()
+    expect(root.required).toContain('member_id')
+    expect(root.required).not.toContain('role')
+    expect(root.required).not.toContain('permissions')
+    expect(root.properties.role).toBeDefined()
+    expect(root.properties.permissions).toBeDefined()
+  })
+
+  it('declares the same sandbox/approval knob enums as create_member', () => {
     const root = parameterRoot()
     const oneOf = root.properties.permissions?.oneOf
     expect(oneOf).toBeDefined()

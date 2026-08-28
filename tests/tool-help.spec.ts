@@ -96,12 +96,14 @@ describe('TOOL_DOCS / TOOL_NAMES completeness', () => {
     }
   })
 
-  it('the documented set matches the tools.ts registration surface (23, no tool_help)', () => {
-    // 23 个文档工具:与 tools.ts 的 checkedTool 注册集一致(含 reassign_task,
-    // archive_member, wake_member;不含 respond_approval——那是 approval-bridge.ts 的另一注册面)。
-    expect(TOOL_NAMES).toHaveLength(23)
+  it('the documented set matches the tools.ts registration surface (24, no tool_help)', () => {
+    // 24 个文档工具:与 tools.ts 的 checkedTool 注册集一致(含 reassign_task,
+    // archive_member, wake_member, reconfigure_member;不含 respond_approval——
+    // 那是 approval-bridge.ts 的另一注册面)。
+    expect(TOOL_NAMES).toHaveLength(24)
     expect(TOOL_NAMES).toContain('reassign_task')
     expect(TOOL_NAMES).toContain('create_member')
+    expect(TOOL_NAMES).toContain('reconfigure_member')
     expect(TOOL_NAMES).toContain('archive_task')
     expect(TOOL_NAMES).toContain('archive_flow')
     expect(TOOL_NAMES).toContain('archive_member')
@@ -113,7 +115,7 @@ describe('TOOL_DOCS / TOOL_NAMES completeness', () => {
 
 describe('USAGE_OVERVIEW (short resident overview)', () => {
   it('is bounded well below the former 8.6KB USAGE_TEXT and keeps the routing + tool_help guidance', () => {
-    expect(USAGE_OVERVIEW.length).toBeLessThan(3200)
+    expect(USAGE_OVERVIEW.length).toBeLessThan(3600)
     expect(USAGE_OVERVIEW).toContain('ROUTE BY SCOPE')
     expect(USAGE_OVERVIEW).toContain('tool_help')
     expect(USAGE_OVERVIEW).toContain('TOOLS')

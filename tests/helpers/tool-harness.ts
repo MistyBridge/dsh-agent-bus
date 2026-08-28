@@ -35,6 +35,8 @@ export interface FakeAgentOptions {
   readonly status?: 'running' | 'idle'
   /** 附加到假 session 的事件日志（决策/R1:注入上下文判定的 session.events 面）。 */
   readonly events?: readonly SessionEvent[]
+  /** Agent 作用域 ctx（reconfigure_member 的 role 经 agent.ctx.get('systemPrompt') 注册）。 */
+  readonly ctx?: Context
 }
 
 /**
@@ -45,6 +47,7 @@ export interface FakeAgent {
   readonly id: SessionId
   readonly status: 'running' | 'idle'
   readonly session: { id: SessionId; header: { cwd?: string; origin?: string } }
+  readonly ctx: Context
   readonly followups: unknown[]
   readonly steers: unknown[]
   followup(message: unknown): void
@@ -62,6 +65,9 @@ export interface FakeAgent {
 export function makeAgent(id: SessionId, options: FakeAgentOptions = {}): FakeAgent {
   const followups: unknown[] = []
   const steers: unknown[] = []
+  const ctx = options.ctx ?? ({
+    get: (name: string): unknown => name === 'systemPrompt' ? { section: () => () => {} } : undefined,
+  } as unknown as Context)
   return {
     id,
     status: options.status ?? 'running',
@@ -73,6 +79,7 @@ export function makeAgent(id: SessionId, options: FakeAgentOptions = {}): FakeAg
       },
       ...(options.events !== undefined ? { events: options.events } : {}),
     },
+    ctx,
     followups,
     steers,
     followup: (message) => {

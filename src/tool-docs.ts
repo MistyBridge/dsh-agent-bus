@@ -4,7 +4,7 @@
  * 渐进式披露（与 skill-system 的「catalog 短 + body 按需」同构）：
  * - {@link USAGE_OVERVIEW} 是常驻系统提示的**简短总览**（路由 + header 约定 +
  *   tool_help 指引），替代原先一次性注入的 8.6KB 长文；
- * - {@link TOOL_DOCS} 是 21 个工具的**完整说明书**，仅经 `tool_help({ tool })`
+ * - {@link TOOL_DOCS} 是全部工具的**完整说明书**，仅经 `tool_help({ tool })`
  *   工具在模型需要时披露（工具结果 = model-visible disclosure path）。
  *
  * 内容以 `src/tools.ts` 的 checkedTool 定义、`src/authorize.ts` 鉴权、ledger
@@ -36,6 +36,7 @@ export const TOOL_NAMES = [
   'answer_question',
   'claim_task',
   'create_member',
+  'reconfigure_member',
   'archive_task',
   'archive_flow',
   'archive_member',
@@ -177,6 +178,13 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 鉴权:caller 须在线且在工作区。
 - 典型用法:扩编团队、给新人一次性配好角色/权限/技能/卡片;不传 workspace 即建在当前工作区。
 - 注意:只用于真实成员,别用它创建一次性探路会话;permissions 旋钮需在沙箱/审批允许范围内;permissions 用 preset 名时以 permissionPresets 声明的合法名为准(未知名会被拒并列出合法名)。`,
+
+  reconfigure_member: `reconfigure_member 改配一个已建成员的角色/权限,不必重建会话。
+- 参数:member_id(必, 成员会话 id, 来自 list_peers), role(可选, 替换角色说明, 注入为 system-prompt section), permissions(可选, preset 名或 {sandbox, approval} 旋钮, 与 create_member 同语法)。
+- 语义:定位该成员(须为同工作区 peer,live 或 dormant)——dormant 先唤醒再改,改配后该成员后续 turn(或下次加载)按新配置生效。role 替换 systemPrompt section;permissions 走 permissionPresets.set / setSandboxMode / setApprovalPolicy,写入会话日志,重启后仍生效。至少给 role/permissions 之一,否则拒绝。
+- 鉴权:authorizePeerOrDormant——caller 须在线且在工作区;目标须为同工作区会话(可 dormant);已归档/subagent 拒绝;不可改配调用方自身。
+- 典型用法:建错角色/权限时一键改配,避免 cancel+recreate 丢历史。
+- 注意:skills 改配本期不支持(技能注册为每层 first-wins,重注册不替换),要改技能请 cancel+recreate;仅影响该成员自身配置,不改任务。`,
 
   archive_task: `archive_task 手动归档/取消归档一个任务(永不自动)。
 - 参数:task_id(必), archived(可选布尔, 默认 true——true 归档, false 取消归档)。
