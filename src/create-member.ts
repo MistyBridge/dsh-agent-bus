@@ -61,8 +61,8 @@ export interface PermissionKnobs {
 
 /** The JSON input `create_member` accepts (mirrors the tool parameter schema). */
 export interface CreateMemberInput {
-  /** Workspace path or id the new member is bound to. */
-  readonly workspace: string
+  /** Workspace path or id the new member is bound to; omitted defaults to the caller's workspace. */
+  readonly workspace?: string
   /** Session name (title), required. */
   readonly name: string
   /** Role/persona prose injected as a system-prompt section. */
@@ -208,21 +208,34 @@ function refusal(error: string): ParseResult {
  * are accepted with a notice so a caller that passes them is told what
  * happened instead of rejected.
  *
+ * `workspace` is optional: when omitted, `defaultWorkspace` — the caller's
+ * resolved workspace path — fills it. A caller that omits `workspace` outside
+ * a workspace (no default) is refused so the plan never carries an unresolved
+ * target.
+ *
  * @param raw - the tool arguments, already schema-validated at the wire.
+ * @param defaultWorkspace - the caller's resolved workspace path, used when
+ *   `raw.workspace` is omitted; `undefined` keeps the field required.
  * @returns a validated plan, or a refusal naming the field.
  */
-export function parseCreateMemberInput(raw: unknown): ParseResult {
+export function parseCreateMemberInput(raw: unknown, defaultWorkspace?: string): ParseResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return refusal('create_member: input must be a JSON object')
   }
   const input = raw as Record<string, unknown>
   const warnings: string[] = []
 
+  let workspace: string
   if (input.workspace === undefined) {
-    return refusal('create_member: missing required field "workspace"')
-  }
-  if (typeof input.workspace !== 'string' || input.workspace.trim() === '') {
+    if (defaultWorkspace !== undefined && defaultWorkspace.trim() !== '') {
+      workspace = defaultWorkspace.trim()
+    } else {
+      return refusal('create_member: missing required field "workspace"')
+    }
+  } else if (typeof input.workspace !== 'string' || input.workspace.trim() === '') {
     return refusal('create_member: field "workspace" must be a non-empty string')
+  } else {
+    workspace = input.workspace.trim()
   }
   if (input.name === undefined) {
     return refusal('create_member: missing required field "name"')
@@ -336,7 +349,7 @@ export function parseCreateMemberInput(raw: unknown): ParseResult {
   return {
     ok: true,
     plan: {
-      workspace: input.workspace.trim(),
+      workspace,
       name: input.name.trim(),
       ...(role !== undefined ? { role } : {}),
       ...(skills !== undefined && skills.length > 0 ? { skills } : {}),

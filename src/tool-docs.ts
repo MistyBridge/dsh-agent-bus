@@ -17,6 +17,7 @@
 /** agent-bus 工具名全集（与 tools.ts 的 checkedTool 逐一对应）。 */
 export const TOOL_NAMES = [
   'list_peers',
+  'wake_member',
   'send_note',
   'create_flow',
   'rename_flow',
@@ -44,12 +45,19 @@ export const TOOL_NAMES = [
 export type ToolName = (typeof TOOL_NAMES)[number]
 
 export const TOOL_DOCS: Record<ToolName, string> = {
-  list_peers: `list_peers 列出你工作区里在线的 peer(独立会话,排除你自己、已归档、subagent 后代),供 create_task / send_note 选 target。
+  list_peers: `list_peers 列出你工作区里的 peer(独立会话,排除你自己、已归档、subagent 后代),供 create_task / send_note 选 target。
 - 参数:无。
-- 返回:每项 { id, title?, status('running'|'idle'), pendingTasks, description?, capabilities? }。pendingTasks = 该会话未完成任务数(submitted/working/input-required);description/capabilities 来自其能力卡。
+- 返回:{ workspace?, peers }。workspace(可选)= 你当前所属的工作区,含 path(必)与可见时的 id(注册表条目有 id 才带),作「当前会话属于哪个 workspace」的只读依据;peers = 每项 { id, title?, status('running'|'idle'|'dormant'), pendingTasks, description?, capabilities? }。status——running(忙)、idle(已加载、回合间)、dormant(持久但未加载,可 wake_member 唤醒);pendingTasks = 该会话未完成任务数(submitted/working/input-required);description/capabilities 来自其能力卡。
 - 鉴权:需 caller 在线、且能解析到注册工作区;仅返回同一 workspace 的会话。
-- 典型用法:派发前 list_peers 确认谁在线、谁忙碌、谁堆积了未完成工作;按 description/capabilities 路由到合适的人。
-- 注意:这是在线快照,不是投递承诺——create_task 仍做权威检查并可能拒绝。`,
+- 典型用法:派发前 list_peers 确认谁在线、谁 dormant、谁忙碌;先读 workspace 得知自己所在工作区(可作 create_member 的缺省 workspace);dormant 的可先用 wake_member 激活再派发;按 description/capabilities 路由到合适的人。
+- 注意:这是快照,不是投递承诺——create_task 仍做权威检查并可能拒绝。`,
+
+  wake_member: `wake_member 唤醒一个休眠成员会话(dormant、非归档、同工作区 peer),使其成为可立即 send_note / create_task 的 live agent。
+- 参数:member_id(必, 成员会话 id, 来自 list_peers, 其 status 应为 dormant)。
+- 语义:休眠成员是持久但未加载的真实同工作区成员;唤醒会按其记录的 composition(预设/工具/persona)与 model route 恢复为 live agent。唤醒后该会话在本进程生命周期内保持 live。
+- 鉴权:authorizePeerOrDormant——caller 须在线且有 workspace;目标须为同 workspace 会话(可休眠);已归档 / subagent 拒绝;不能唤醒自身。
+- 典型用法:list_peers 看到某个成员 dormant 时,先 wake_member 激活,再立即 create_task / send_note 派发,避免投递前目标未活。
+- 注意:无 model route 或恢复失败时拒绝(可用 create_task 让其走 wake-on-delivery 兜底)。`,
 
   send_note: `send_note(SMALL 通道)发一条轻量消息给 peer:一句确认、一个提问、一次协调 ping。无任务记录、无验收、无待办,对方按需 prose 回复。
 - 参数:target(必, peer session id, 源自 list_peers), content(必)。
@@ -164,11 +172,11 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 注意:只有 submitted(或 working)可 claim;其他状态报错。`,
 
   create_member: `create_member 一键入职:为工作区创建一位正式成员。
-- 参数:workspace(必, 路径或 id), name(必, 会名 ≤20 字), role(可选, 注入为 system-prompt section 的角色说明), skills(可选, 运行时 skill 定义数组 {name,description,content}), permissions(可选, preset 名 或 {sandbox, approval} 旋钮), flow(可选, 加入的 flow), description(可选, 能力卡 ≤200), modules(可选, 预留扩展点)。
+- 参数:workspace(可选, 路径或 id, 省略则用 caller 当前工作区), name(必, 会名 ≤20 字), role(可选, 注入为 system-prompt section 的角色说明), skills(可选, 运行时 skill 定义数组 {name,description,content}), permissions(可选, preset 名 或 {sandbox, approval} 旋钮:preset 名须为 permissionPresets 注册的合法名,旋钮 sandbox ∈ [read-only, workspace-write, danger-full-access]、approval ∈ [ask, never]), flow(可选, 加入的 flow), description(可选, 能力卡 ≤200), modules(可选, 预留扩展点)。
 - 语义:创建会话(绑 workspace)→ 重命名 → 注入 role(section)→ 挂载 skills → 配置 permissions(preset 或显式旋钮)→ 可选加入 flow → 写能力卡。baseline 组合 = deployment 默认 agent preset(存在时)。mcp/modules 本期接收但跳过(仅告警,不报错)。任一步失败回滚已建部分,不留半成品。
 - 鉴权:caller 须在线且在工作区。
-- 典型用法:扩编团队、给新人一次性配好角色/权限/技能/卡片。
-- 注意:只用于真实成员,别用它创建一次性探路会话;permissions 旋钮需在沙箱/审批允许范围内。`,
+- 典型用法:扩编团队、给新人一次性配好角色/权限/技能/卡片;不传 workspace 即建在当前工作区。
+- 注意:只用于真实成员,别用它创建一次性探路会话;permissions 旋钮需在沙箱/审批允许范围内;permissions 用 preset 名时以 permissionPresets 声明的合法名为准(未知名会被拒并列出合法名)。`,
 
   archive_task: `archive_task 手动归档/取消归档一个任务(永不自动)。
 - 参数:task_id(必), archived(可选布尔, 默认 true——true 归档, false 取消归档)。
@@ -196,14 +204,13 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 export const USAGE_OVERVIEW = `You share a workspace with other agent sessions and can dispatch work to them.
 
 ROUTE BY SCOPE — pick the channel that matches how big the ask is:
-- SMALL (a message, a question, a confirmation, a one-line coordination ping): send_note. No record, no lifecycle, no acceptance — the peer just answers in prose.
+- SMALL (a message, a question, a confirmation, a one-line ping): send_note. No record, no lifecycle, no acceptance — the peer just answers in prose.
 - MEDIUM (one deliverable the peer must produce and you will verify): create_task. Full lifecycle: report → settle → rework/cancel, with timeout backstop.
 - LARGE (a multi-step effort that needs planning and ordering): create_flow. FIRST write out the full plan (what must happen, in what order, by whom), THEN create the flow, then split the plan into tasks created with flow_id and dependencies so the DAG auto-schedules: each task delivers only after its predecessors settle, and a failure propagates down the chain automatically. The flow is your roadmap; the DAG view renders it.
 Never use a heavier channel than the ask needs, and never a lighter one: chat-as-task is how tasks get stuck forever in working; task-as-chat loses the lifecycle that keeps work accountable.
 
 ROUTING PREFERENCE — prefer agent-bus for work you would otherwise fan out: durable and reviewable, not a fire-and-forget subagent:
-- LARGE / multi-step / multi-deliverable, or parallel work with subdeliverables → create_flow (+ create_task with flow_id + dependencies): durable, DAG-scheduled, reviewable per task.
-- Peer / team collaboration, shared-workspace work, anything that should be visible and accepted → agent-bus.
+- LARGE / multi-step / multi-deliverable, or parallel work with subdeliverables → create_flow (+ create_task with flow_id + dependencies): durable, DAG-scheduled, reviewable per task.- Peer / team collaboration, shared-workspace work, anything that should be visible and accepted → agent-bus.
 - Only one-shot, no-persistence, independent-context delegation → the harness subagent tool.
 
 Incoming agent-bus messages open with a header naming the request kind, so read it first:

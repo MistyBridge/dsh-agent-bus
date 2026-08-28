@@ -461,6 +461,17 @@ async function subagentSessionIds(ctx: Context): Promise<Set<string>> {
 export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: ToolsDeps): void {
   const { ledger, workspaces, limiter } = deps
 
+  // Preset names for the create_member permissions hint, read from the live
+  // service. The test/standalone stub composes no permissionPresets service
+  // (or its ctx.get is absent), so a static example list still names the two
+  // presets the reference bundle ships.
+  const permissionPresets = typeof ctx.get === 'function'
+    ? ctx.get('permissionPresets') as PermissionPresetHost | undefined
+    : undefined
+  const permissionPresetNamesHint = permissionPresets !== undefined && permissionPresets.names.length > 0
+    ? permissionPresets.names.join(', ')
+    : 'workspace-write, danger-full-access'
+
   ctx.tools.register(checkedTool({
     name: 'list_peers',
     description:
@@ -475,35 +486,52 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
     parameters: {},
     output: {
       schema: {
-        type: 'array',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            id: { type: 'string', required: true },
-            title: { type: 'string' },
-            status: { type: 'string', required: true, enum: ['running', 'idle', 'dormant'] },
-            pendingTasks: { type: 'number', required: true },
-            description: { type: 'string' },
-            capabilities: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                properties: {
-                  id: { type: 'string', required: true },
-                  label: { type: 'string', required: true },
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          workspace: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              path: { type: 'string', required: true },
+              id: { type: 'string' },
+            },
+          },
+          peers: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', required: true },
+                title: { type: 'string' },
+                status: { type: 'string', required: true, enum: ['running', 'idle', 'dormant'] },
+                pendingTasks: { type: 'number', required: true },
+                description: { type: 'string' },
+                capabilities: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      id: { type: 'string', required: true },
+                      label: { type: 'string', required: true },
+                    },
+                  },
                 },
               },
             },
           },
         },
       },
-      render: (_args, peers) => [{
-        type: 'text',
-        text: peers.length === 0
+      render: (_args, result) => {
+        const workspace = result.workspace !== undefined
+          ? `\ncurrent workspace: ${result.workspace.path}${result.workspace.id !== undefined ? ` (id ${result.workspace.id})` : ''}`
+          : '\ncurrent workspace: (none — you are not inside a registered workspace)'
+        const body = result.peers.length === 0
           ? 'no reachable peers — use create_member to create a peer session, or confirm your workspace.'
-          : peers.map(p => {
+          : result.peers.map(p => {
             const name = p.title !== undefined && p.title !== '' ? p.title : p.id
             const caps = Array.isArray(p.capabilities) && p.capabilities.length > 0
               ? ` caps=${p.capabilities.map(c => c.id).join(',')}`
@@ -513,23 +541,24 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
               : ''
             return `${name} [${p.status}] pending=${String(p.pendingTasks)}${caps}${desc} (${p.id})`
           }).join('\n')
-            + '\n(target: use the id, not the title, for create_task/send_note — the id is unambiguous)',
-      }],
+            + '\n(target: use the id, not the title, for create_task/send_note — the id is unambiguous)'
+        return [{ type: 'text', text: workspace + '\n' + body }]
+      },
     },
     presentCall: () => ({ card: 'generic', title: 'agent-bus:发现 peer', kind: 'other' }),
-    presentResult: (_args, peers) => ({ card: 'generic', title: 'agent-bus:发现 peer', rawInput: peers }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:发现 peer', rawInput: result }),
     async execute(_args, exec) {
       const callerId = requireCaller(exec.agent, 'list_peers')
       const caller = ctx.agents.get(callerId)
       if (caller === undefined) throw new Error('list_peers: the calling session is not a live agent')
       const workspacePath = await resolveWorkspacePath(workspaces, caller)
-      if (workspacePath === undefined) return []
+      if (workspacePath === undefined) return { peers: [] }
       // Peers are the caller's workspace account, NOT just live agents: a
       // dormant (persisted but not currently live) same-workspace session is
       // still a valid, wakeable target and must appear. The registry account
       // is the sidebar's source, so whatever the sidebar shows is the peer set.
       const workspace = workspaces.list().find(entry => entry.path === workspacePath)
-      if (workspace === undefined) return []
+      if (workspace === undefined) return { peers: [] }
       const archived = new Set<string>(workspaces.archivedSessionIds as readonly string[])
       const live = new Map<string, Agent>()
       for (const agent of ctx.agents.list()) live.set(String(agent.id), agent)
@@ -561,7 +590,66 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
             : {}),
         })
       }
-      return peers
+      // The caller's current workspace, read-only: `path` is always derivable
+      // from resolveWorkspacePath; `id` comes from the registry entry when one
+      // exists (the test/standalone registry stub may omit it).
+      const workspaceId = (workspace as { id?: string }).id
+      return {
+        workspace: {
+          path: workspacePath,
+          ...(workspaceId !== undefined ? { id: workspaceId } : {}),
+        },
+        peers,
+      }
+    },
+  }))
+
+  ctx.tools.register(checkedTool({
+    name: 'wake_member',
+    description:
+      'Wake one dormant member session (a non-archived peer in your workspace) so it becomes a '
+      + 'live agent you can send_note / create_task to immediately. A dormant peer is a real '
+      + 'same-workspace member that is persisted but not currently loaded; waking resumes it with '
+      + 'its recorded composition and model route. The member stays live for the process lifetime '
+      + 'after a wake. Use this to activate a peer before dispatching work to it — list_peers shows '
+      + 'which peers are dormant.',
+    parameters: {
+      member_id: { type: 'string', required: true, description: 'The member session id (peer id from list_peers) to wake.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          memberId: { type: 'string', required: true },
+          title: { type: 'string' },
+          status: { type: 'string', required: true, enum: ['running', 'idle'] },
+        },
+      },
+      render: (_args, result) => [{
+        type: 'text',
+        text: `成员 ${result.memberId} 已激活 (${result.status}${result.title !== undefined ? ` — ${result.title}` : ''})`,
+      }],
+    },
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:唤醒成员', kind: 'other', rawInput: args }),
+    presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:唤醒成员', rawInput: result }),
+    async execute(args, exec) {
+      const callerId = requireCaller(exec.agent, 'wake_member')
+      // Authorize the target as a same-workspace peer (live or dormant,
+      // non-archived, non-subagent) before waking — the same gate create_task /
+      // reassign use, so only a real reachable member can be activated.
+      const decision = await authorizePeerOrDormant(ctx, workspaces, callerId, String(args.member_id) as SessionId)
+      if (!decision.ok) throw new Error(decision.message)
+      const target = await wakeSession(ctx, String(args.member_id) as SessionId)
+      if (target === undefined) {
+        throw new Error(`wake_member: session "${String(args.member_id)}" could not be woken (no model route or resume failed)`)
+      }
+      const title = ctx.sessionTitle.get(target.session)?.title
+      return {
+        memberId: String(args.member_id),
+        ...(title !== undefined && title !== '' ? { title } : {}),
+        status: target.status === 'running' ? 'running' : 'idle',
+      }
     },
   }))
 
@@ -1980,7 +2068,8 @@ function assertFlowName(name: string): void {
     name: 'create_member',
     description:
       'One-click onboarding: create a full team member bound to a workspace. Required: '
-      + 'workspace (path or id) and name (session title). Optional: role (persona prose injected '
+      + 'name (session title). workspace (path or id) is optional and defaults to the caller\'s '
+      + 'current workspace when omitted. Optional: role (persona prose injected '
       + 'as a system-prompt section), skills (runtime skill definitions mounted in the member\'s '
       + 'scope), permissions (preset name, or {sandbox, approval} knobs), flow (flow id or name '
       + 'to join), and description (capability-card text, at most 200 characters). The member '
@@ -1991,7 +2080,7 @@ function assertFlowName(name: string): void {
       + 'half-baked member survives. Use for real team members only — a member is a named '
       + 'session with its own skills, permissions, and card.',
     parameters: {
-      workspace: { type: 'string', required: true, description: 'Workspace path or id the new member is bound to.' },
+      workspace: { type: 'string', description: 'Workspace path or id the new member is bound to; omit to use the caller\'s current workspace.' },
       name: { type: 'string', required: true, description: 'Session name (title), 1–20 chars; whitespace-padded values are trimmed.' },
       role: { type: 'string', description: 'Role/persona prose injected as a system-prompt section.' },
       skills: {
@@ -2010,17 +2099,25 @@ function assertFlowName(name: string): void {
       mcp: { type: 'object', additionalProperties: true, description: 'MCP configuration; not injectable programmatically this phase, skipped with a warning.' },
       permissions: {
         oneOf: [
-          { type: 'string', description: 'Permission preset name (e.g. workspace-write, danger-full-access).' },
+          {
+            type: 'string',
+            description:
+              'Permission preset name. One of: ' + permissionPresetNamesHint
+              + '. An unknown preset name is refused.',
+          },
           {
             type: 'object',
             additionalProperties: false,
             properties: {
-              sandbox: { type: 'string', enum: [...SANDBOX_MODES], required: true, description: 'Sandbox mode.' },
-              approval: { type: 'string', enum: [...APPROVAL_POLICIES], required: true, description: 'Approval policy.' },
+              sandbox: { type: 'string', enum: [...SANDBOX_MODES], required: true, description: `Sandbox mode; one of ${SANDBOX_MODES.join('|')}.` },
+              approval: { type: 'string', enum: [...APPROVAL_POLICIES], required: true, description: `Approval policy; one of ${APPROVAL_POLICIES.join('|')}.` },
             },
           },
         ],
-        description: 'Preset name, or explicit {sandbox, approval} knobs; omitted keeps the workspace default.',
+        description:
+          'Preset name, or explicit {sandbox, approval} knobs (sandbox ∈ ['
+          + SANDBOX_MODES.join(', ') + '], approval ∈ [' + APPROVAL_POLICIES.join(', ')
+          + ']); omitted keeps the workspace default.',
       },
       flow: { type: 'string', description: 'Flow id or name to join, resolved within the target workspace.' },
       description: { type: 'string', description: 'Capability-card description (at most 200 characters).' },
@@ -2054,7 +2151,7 @@ function assertFlowName(name: string): void {
           + (result.warnings.length > 0 ? `; warnings: ${result.warnings.join('; ')}` : ''),
       }],
     },
-    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:创建成员', kind: 'other', rawInput: { workspace: args.workspace, name: args.name, ...(args.role !== undefined ? { role: args.role } : {}) } }),
+    presentCall: (args) => ({ card: 'generic', title: 'agent-bus:创建成员', kind: 'other', rawInput: { name: args.name, ...(args.workspace !== undefined ? { workspace: args.workspace } : {}), ...(args.role !== undefined ? { role: args.role } : {}) } }),
     presentResult: (_args, result) => ({ card: 'generic', title: 'agent-bus:创建成员', rawInput: result }),
     async execute(args, exec) {
       const callerId = requireCaller(exec.agent, 'create_member')
@@ -2064,7 +2161,7 @@ function assertFlowName(name: string): void {
       if (callerWorkspace === undefined) {
         throw new Error('create_member: the calling session is not inside a registered workspace')
       }
-      const parsed = parseCreateMemberInput(args)
+      const parsed = parseCreateMemberInput(args, callerWorkspace)
       if (!parsed.ok) throw new Error(parsed.error)
       const host: CreateMemberHost = {
         workspaceRegistry: workspaces,

@@ -37,6 +37,7 @@ import {
 interface CapturedTool {
   name: string
   output: { schema: JsonSchemaNode }
+  parameters: Record<string, unknown>
 }
 
 const CONFIG: ToolsConfig = {
@@ -150,14 +151,17 @@ function maxDetailView(): Record<string, unknown> {
 function maximalValueOf(name: string): unknown {
   switch (name) {
     case 'list_peers':
-      return [{
-        id: 's1',
-        title: 'Peer',
-        status: 'running',
-        pendingTasks: 2,
-        description: 'desc',
-        capabilities: [{ id: 'code', label: 'Coding' }],
-      }]
+      return {
+        workspace: { path: '/workspace', id: 'ws-1' },
+        peers: [{
+          id: 's1',
+          title: 'Peer',
+          status: 'running',
+          pendingTasks: 2,
+          description: 'desc',
+          capabilities: [{ id: 'code', label: 'Coding' }],
+        }],
+      }
     case 'send_note':
       return { delivered: true, queued: false, messageId: 'm1' }
     case 'create_flow':
@@ -213,6 +217,8 @@ function maximalValueOf(name: string): unknown {
       return { flowId: 'f1', name: 'Flow', archived: true }
     case 'archive_member':
       return { memberId: 's1', archived: true }
+    case 'wake_member':
+      return { memberId: 's1', title: 'Wake', status: 'idle' }
     case 'update_card':
       return { description: 'desc', capabilities: [{ id: 'code', label: 'Coding' }] }
     case 'tool_help':
@@ -357,5 +363,33 @@ describe('checkedTool output-mismatch diagnostics', () => {
   it('schema 合规的返回值原样通过', async () => {
     const tool = driftTool(() => ({ taskId: 't1' }))
     await expect(tool.execute({}, {} as never)).resolves.toEqual({ taskId: 't1' })
+  })
+})
+
+describe('create_member parameter drift (workspace optional, permissions hint)', () => {
+  /** 编译后的参数 schema：`required` 为顶层数组，`properties` 为各字段 schema。 */
+  function parameterRoot(): { required?: string[]; properties: Record<string, { enum?: unknown[]; oneOf?: unknown[] }> } {
+    const tools = captureTools()
+    return tools.get('create_member')!.parameters as unknown as {
+      required?: string[]; properties: Record<string, { enum?: unknown[]; oneOf?: unknown[] }>
+    }
+  }
+
+  it('makes workspace optional (not in required) and keeps name required', () => {
+    const root = parameterRoot()
+    expect(root.required).not.toContain('workspace')
+    expect(root.required).toContain('name')
+    expect(root.properties.workspace).toBeDefined()
+  })
+
+  it('declares sandbox/approval knob enums so the model sees legal values', () => {
+    const root = parameterRoot()
+    const oneOf = root.properties.permissions?.oneOf
+    expect(oneOf).toBeDefined()
+    const knobBranch = (oneOf ?? []).find((branch: { type?: string }) => branch.type === 'object')
+    expect(knobBranch).toBeDefined()
+    const knob = knobBranch as { properties: Record<string, { enum?: unknown[] }> }
+    expect(knob.properties.sandbox.enum).toEqual(['read-only', 'workspace-write', 'danger-full-access'])
+    expect(knob.properties.approval.enum).toEqual(['ask', 'never'])
   })
 })

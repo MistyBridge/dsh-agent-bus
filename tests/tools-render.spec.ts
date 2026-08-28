@@ -486,9 +486,10 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
     const harness = await newHarness()
     harness.agents.add(makeAgent(SESSION_A))
     // SESSION_B and SESSION_REVIEWER are in the workspace account but not live.
-    const peers = await harness.run('list_peers', {}, SESSION_A) as {
-      id: string; title: string; status: string; pendingTasks: number;
-    }[]
+    const result = await harness.run('list_peers', {}, SESSION_A) as {
+      workspace?: { path: string; id?: string }; peers: { id: string; title: string; status: string; pendingTasks: number }[];
+    }
+    const peers = result.peers
     expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
     const dormant = peers.find(p => p.id === String(SESSION_B))!
     expect(dormant.status).toBe('dormant')
@@ -501,10 +502,10 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_B))
     harness.setTitle(SESSION_B, 'Quant Strategy')
-    const peers = await harness.run('list_peers', {}, SESSION_A) as {
-      id: string; title: string; status: string; pendingTasks: number;
-    }[]
-    const live = peers.find(p => p.id === String(SESSION_B))!
+    const result = await harness.run('list_peers', {}, SESSION_A) as {
+      peers: { id: string; title: string; status: string; pendingTasks: number }[];
+    }
+    const live = result.peers.find(p => p.id === String(SESSION_B))!
     expect(live.status).toBe('running')
     expect(live.title).toBe('Quant Strategy')
   })
@@ -512,7 +513,8 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
   it('hides an archived same-workspace session', async () => {
     const harness = await newHarness({ archived: [SESSION_B] })
     harness.agents.add(makeAgent(SESSION_A))
-    const peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
+    const result = await harness.run('list_peers', {}, SESSION_A) as { peers: { id: string; status: string }[] }
+    const peers = result.peers
     expect(peers.map(p => p.id)).not.toContain(String(SESSION_B))
     expect(peers).toHaveLength(1)
     expect(peers[0]!.id).toBe(String(SESSION_REVIEWER))
@@ -523,19 +525,29 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
     const harness = await newHarness()
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_REVIEWER, { origin: 'subagent' }))
-    const peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
-    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B)])
-    expect(peers[0]!.status).toBe('dormant')
+    const result = await harness.run('list_peers', {}, SESSION_A) as { peers: { id: string; status: string }[] }
+    expect(result.peers.map(p => p.id).sort()).toEqual([String(SESSION_B)])
+    expect(result.peers[0]!.status).toBe('dormant')
+  })
+
+  it('exposes the caller current workspace (read-only) with the peers empty', async () => {
+    const harness = await newHarness({ workspaces: [{ path: WORKSPACE, sessionIds: [SESSION_A] }] })
+    harness.agents.add(makeAgent(SESSION_A))
+    const result = await harness.run('list_peers', {}, SESSION_A) as {
+      workspace?: { path: string; id?: string }; peers: unknown[];
+    }
+    expect(result.peers).toEqual([])
+    expect(result.workspace?.path).toBe(WORKSPACE)
   })
 
   it('empty account keeps the create_member / confirm-workspace guidance', async () => {
     const harness = await newHarness({ workspaces: [{ path: WORKSPACE, sessionIds: [SESSION_A] }] })
     harness.agents.add(makeAgent(SESSION_A))
-    const peers = await harness.run('list_peers', {}, SESSION_A)
-    expect(peers).toEqual([])
+    const result = await harness.run('list_peers', {}, SESSION_A)
+    expect(result).toEqual({ workspace: { path: WORKSPACE }, peers: [] })
     const render = harness.tools.get('list_peers')!.output.render as
       (args: unknown, value: unknown) => { type: string; text: string }[]
-    const text = render({}, peers)[0]!.text
+    const text = render({}, result)[0]!.text
     expect(text).toContain('no reachable peers')
     expect(text).toContain('create_member')
     expect(text).toContain('confirm your workspace')
@@ -546,11 +558,12 @@ describe('list_peers visible-set semantics (live + dormant)', () => {
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_B))
     harness.setTitle(SESSION_B, 'Quant Strategy')
-    const peers = await harness.run('list_peers', {}, SESSION_A)
-    expect(peers).toHaveLength(1)
+    const result = await harness.run('list_peers', {}, SESSION_A)
+    expect(result).toHaveProperty('peers')
+    expect((result as { peers: unknown[] }).peers).toHaveLength(1)
     const render = harness.tools.get('list_peers')!.output.render as
       (args: unknown, value: unknown) => { type: string; text: string }[]
-    const text = render({}, peers)[0]!.text
+    const text = render({}, result)[0]!.text
     expect(text).toContain('Quant Strategy')
     expect(text).toContain(`(${String(SESSION_B)})`)
     expect(text).toContain('use the id, not the title, for create_task/send_note')
@@ -562,15 +575,15 @@ describe('archive_member workspace-scoped member visibility (manual archive, one
     const harness = await newHarness()
     harness.agents.add(makeAgent(SESSION_A))
     harness.agents.add(makeAgent(SESSION_B))
-    let peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
-    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
+    let peers = await harness.run('list_peers', {}, SESSION_A) as { peers: { id: string; status: string }[] }
+    expect(peers.peers.map(p => p.id).sort()).toEqual([String(SESSION_B), String(SESSION_REVIEWER)].sort())
 
     const res = await harness.run('archive_member', { member_id: String(SESSION_B) }, SESSION_A) as
       { memberId: string; archived: boolean }
     expect(res).toEqual({ memberId: String(SESSION_B), archived: true })
-    peers = await harness.run('list_peers', {}, SESSION_A) as { id: string; status: string }[]
-    expect(peers.map(p => p.id)).not.toContain(String(SESSION_B))
-    expect(peers.map(p => p.id).sort()).toEqual([String(SESSION_REVIEWER)])
+    peers = await harness.run('list_peers', {}, SESSION_A) as { peers: { id: string; status: string }[] }
+    expect(peers.peers.map(p => p.id)).not.toContain(String(SESSION_B))
+    expect(peers.peers.map(p => p.id).sort()).toEqual([String(SESSION_REVIEWER)])
     // Archive set is append-only: the archived id now reflects the workspace registry.
     expect(harness.workspaces.archivedSessionIds.map(String)).toContain(String(SESSION_B))
   })
@@ -587,5 +600,40 @@ describe('archive_member workspace-scoped member visibility (manual archive, one
     await expect(
       harness.run('archive_member', { member_id: 'other-session' }, SESSION_A),
     ).rejects.toThrow(/not a session of your workspace/)
+  })
+})
+
+describe('wake_member activates a live peer; refuses a non-peer or archived', () => {
+  it('returns running/idle for an already-live same-workspace member', async () => {
+    const harness = await newHarness()
+    harness.agents.add(makeAgent(SESSION_A))
+    harness.agents.add(makeAgent(SESSION_B))
+    harness.setTitle(SESSION_B, 'Quant Strategy')
+    const res = await harness.run('wake_member', { member_id: String(SESSION_B) }, SESSION_A) as
+      { memberId: string; title: string; status: string }
+    expect(res.memberId).toBe(String(SESSION_B))
+    expect(res.title).toBe('Quant Strategy')
+    expect(res.status).toBe('running')
+  })
+
+  it('refuses a session that is not in the caller workspace (non-peer)', async () => {
+    const harness = await newHarness({
+      workspaces: [
+        { path: WORKSPACE, sessionIds: [SESSION_A, SESSION_B] },
+        { path: 'D:\\other-workspace', sessionIds: ['other-session' as unknown as SessionId] },
+      ],
+    })
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('wake_member', { member_id: 'other-session' }, SESSION_A),
+    ).rejects.toThrow(/not a session of your workspace/)
+  })
+
+  it('refuses an archived member', async () => {
+    const harness = await newHarness({ archived: [SESSION_B] })
+    harness.agents.add(makeAgent(SESSION_A))
+    await expect(
+      harness.run('wake_member', { member_id: String(SESSION_B) }, SESSION_A),
+    ).rejects.toThrow(/archived/)
   })
 })

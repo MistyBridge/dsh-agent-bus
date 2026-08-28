@@ -180,6 +180,19 @@ describe('parseCreateMemberInput', () => {
     if (!result.ok) expect(result.error).toContain('"workspace"')
   })
 
+  it('fills an omitted workspace from the caller default, trimming it', () => {
+    const result = parseCreateMemberInput({ name: 'M' }, '  /caller-workspace  ')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.workspace).toBe('/caller-workspace')
+  })
+
+  it('still refuses an omitted workspace when no caller default is available', () => {
+    const result = parseCreateMemberInput({ name: 'M' }, '   ')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('"workspace"')
+  })
+
   it('refuses a missing name, naming the field', () => {
     const result = parseCreateMemberInput({ workspace: WORKSPACE })
     expect(result.ok).toBe(false)
