@@ -142,6 +142,11 @@ export interface PanelSnapshot {
   readonly flows: readonly FlowView[]
   readonly stats: StatsView
   /**
+   * Durable DAG dispatch switch (module-map §4). Optional: hosts built before
+   * this field report nothing, treated as `running`.
+   */
+  readonly dag?: 'running' | 'paused'
+  /**
    * Whether the running host instance predates the latest build (decision 7).
    * Optional: hosts built before this field are treated as current.
    */
@@ -591,6 +596,7 @@ const EMPTY_SNAPSHOT: PanelSnapshot = {
   tasks: [],
   flows: [],
   stats: EMPTY_STATS,
+  dag: 'running',
   instanceStale: false,
   staleMessage: null,
   recoveredWorkers: 0,

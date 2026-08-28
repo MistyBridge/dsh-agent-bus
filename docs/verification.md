@@ -6,7 +6,7 @@ dsh-agent-bus 的四层验证体系:离线检查 → 组合验证 → 真实 e2e
 
 ```sh
 pnpm install
-pnpm test       # vitest 单元测试(566 用例,见下表分文件数;随并发工人持续变动,以实测为准)
+pnpm test       # vitest 单元测试(590 用例,见下表分文件数;随并发工人持续变动,以实测为准)
 pnpm build      # tsc 双配置 + tsdown 客户端 bundle
 ```
 
@@ -28,9 +28,10 @@ pnpm build      # tsc 双配置 + tsdown 客户端 bundle
 | `approval-bridge` 测试 | PM 代审批:转发、时限、拒绝理由与建议(决策 6) | 7 |
 | `create-member` 测试 | 成员入职解析/回滚/权限映射(决策 5) | 55 |
 | `reconfigure-member` 测试 | 成员改配解析/角色替换/权限映射/dormant 唤醒(易用性 4.4) | 23 |
+| `dag-switch` 测试 | DAG 持久开关:解析/编排/暂停不投递/恢复补投(module-map §4) | 9 |
 | `tool-help` 测试 | tool_help 按需说明书 + 文档/工具面一致性(渐进式披露) | 8 |
 | `smoke` 测试 | 测试基座可用性 | 2 |
-| **合计** | | **566** |
+| **合计** | | **590** |
 
 > 注:`panel-model` 的 2 组 `it.each`(各 13 行)统计为 26 用例,与 104 个普通 `it`
 > 相加共 130;`tools-schema` 的 1 组 `it.each`(20 行)与 7 个普通 `it` 共 27。

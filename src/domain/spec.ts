@@ -191,11 +191,14 @@ export type StoredPendingMessage = z.infer<typeof pendingMessageRecord>
 
 /**
  * Durable ledger state. `taskIds` is the authoritative creation order, which
- * the listing tools page over without scanning the table. Defaulted so a
- * record written before the field parses unchanged.
+ * the listing tools page over without scanning the table. `dag` is the DAG
+ * dispatch switch (`running` = auto-dispatch ready queued tasks, `paused` =
+ * new deliveries are suppressed until it returns to `running`). Both defaulted
+ * so a record written before the field parses unchanged.
  */
 export const agentBusDomainState = z.object({
   taskIds: z.array(taskId).default([]),
+  dag: z.enum(['running', 'paused']).default('running'),
 })
 
 /** Durable ledger state inferred from {@link agentBusDomainState}. */
@@ -208,7 +211,8 @@ export type AgentBusDomainState = z.infer<typeof agentBusDomainState>
  * Version 8 adds the flows container (`flows` table, `tasks.flowId`),
  * version 9 adds `tasks.handoffs`, version 10 adds `pending_messages`
  * (durable offline send_note delivery), version 11 adds the lightweight
- * batch container (`batches` table, `tasks.batchId`). The version bump
+ * batch container (`batches` table, `tasks.batchId`), version 12 adds the
+ * durable `dag` switch (`agentBusDomainState.dag`). The version bump
  * invalidates the storage unit — keep a backup of `agent_bus.json` first
  * (v1.3 §6), then bump the version stamp once after upgrading; the ledger
  * migrates pre-release `submitted` rows without a messageId to `queued` at
@@ -216,10 +220,10 @@ export type AgentBusDomainState = z.infer<typeof agentBusDomainState>
  */
 export const agentBusDomainSpec = defineDomain({
   name: 'agent_bus',
-  version: 11,
+  version: 12,
   global: {
     schema: agentBusDomainState,
-    initial: { taskIds: [] },
+    initial: { taskIds: [], dag: 'running' as const },
   },
   tables: {
     tasks: domainTable<TaskId, StoredTaskRecord>(taskRecord),

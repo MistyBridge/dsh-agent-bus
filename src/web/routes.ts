@@ -121,8 +121,17 @@ export function registerWebSurface(ctx: Context, host: WebHost): void {
             send(200, { taskId: String(taskId), status: task.status, dispatched: false })
             return
           }
-          await dispatchOne(ctx, ledger, taskId)
-          send(200, { taskId: String(taskId), status: 'submitted', dispatched: true })
+          const outcome = await dispatchOne(ctx, ledger, taskId)
+          if (outcome.dispatched) {
+            send(200, { taskId: String(taskId), status: 'submitted', dispatched: true })
+          } else if (outcome.reason === 'dag-paused') {
+            // The DAG switch is paused: the task stays queued and will be
+            // picked up when the switch returns to running.
+            send(200, { taskId: String(taskId), status: 'queued', dispatched: false, dag: 'paused' })
+          } else {
+            // no-worker / raced: the row stays where dispatchOne left it (queued).
+            send(200, { taskId: String(taskId), status: task.status, dispatched: false })
+          }
         } catch (error: unknown) {
           send(500, { error: String(error) })
         }

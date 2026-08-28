@@ -384,18 +384,29 @@ ctx.tools.register(checkedTool({
         ? []
         : [...blockedByOf(recorded.task, ledger.listAll()).map(String)]
       if (blocked.length === 0) {
-        const target = await wakeSession(ctx, targetId)
-        if (target !== undefined) {
-          await ledger.recordDelivery(taskId, message.id)
-          deliverTask(target, message, mode)
-        } else {
+        // DAG switch: paused suppresses NEW deliveries. Hold the task queued so
+        // the resume catch-up sweep delivers it when the switch returns to
+        // running — its dependencies are satisfied, so nothing blocks a later
+        // dispatch.
+        if (ledger.dagState() === 'paused') {
           await ledger.transition(taskId, 'queued')
+        } else {
+          const target = await wakeSession(ctx, targetId)
+          if (target !== undefined) {
+            await ledger.recordDelivery(taskId, message.id)
+            deliverTask(target, message, mode)
+          } else {
+            await ledger.transition(taskId, 'queued')
+          }
         }
       }
       const pending = ledger.listFor(targetId).filter(
         row => row.status === 'submitted' || row.status === 'working' || row.status === 'input-required',
       )
-      return { taskId: String(taskId), status: recorded.task.status, queuePosition: pending.length, blockedBy: blocked }
+      // Report the row's actual status, not the pre-dispatch snapshot: a task
+      // held queued by a paused switch reads as queued here.
+      const currentStatus = ledger.get(taskId)?.status ?? recorded.task.status
+      return { taskId: String(taskId), status: currentStatus, queuePosition: pending.length, blockedBy: blocked }
     },
   }))
 
@@ -437,6 +448,7 @@ ctx.tools.register(checkedTool({
           taskId: { type: 'string', required: true },
           status: { type: 'string', required: true },
           blockedBy: { type: 'array', items: { type: 'string' }, required: true },
+          dagPaused: { type: 'boolean' },
         },
       },
       render: (_args, result) => [{
@@ -444,7 +456,8 @@ ctx.tools.register(checkedTool({
         text: `task ${result.taskId} updated → ${String(result.status)}`
           + (result.blockedBy.length > 0
             ? `, awaiting dependencies: ${result.blockedBy.join(', ')}`
-            : ', dependencies satisfied'),
+            : ', dependencies satisfied')
+          + (result.dagPaused === true ? ' (DAG 已暂停,恢复后自动投递)' : ''),
       }],
     },
     presentCall: (args) => ({
@@ -496,10 +509,15 @@ ctx.tools.register(checkedTool({
       if (!edited.ok) throw new Error(edited.message)
 
       // Recompute readiness: a dependency edit may have cleared the last
-      // blocker, in which case the task dispatches immediately.
+      // blocker, in which case the task dispatches immediately. When the DAG
+      // switch is paused the task stays queued (deps satisfied, not delivered)
+      // and the caller is told so it can read the switch, not a stale blocker.
       const blocked: string[] = [...blockedByOf(edited.task, ledger.listAll()).map(String)]
       if (blocked.length === 0) {
-        await dispatchOne(ctx, ledger, taskId)
+        const outcome = await dispatchOne(ctx, ledger, taskId)
+        if (!outcome.dispatched && outcome.reason === 'dag-paused') {
+          return { taskId: String(taskId), status: edited.task.status, blockedBy: blocked, dagPaused: true }
+        }
       }
       return { taskId: String(taskId), status: edited.task.status, blockedBy: blocked }
     },

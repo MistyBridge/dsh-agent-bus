@@ -51,6 +51,16 @@ export function shouldHeartbeatRedeliver(
 }
 
 /**
+ * Result of one {@link dispatchOne} attempt. `dispatched: true` means the task
+ * moved queued → submitted and was delivered; `dispatched: false` carries why
+ * it did not (`dag-paused` suppresses delivery until the switch returns to
+ * `running`).
+ */
+export type DispatchOutcome =
+  | { readonly dispatched: true; readonly taskId: TaskId; readonly status: 'submitted' }
+  | { readonly dispatched: false; readonly reason: 'not-queued' | 'no-worker' | 'dag-paused' | 'raced' }
+
+/**
  * Deliver one queued task: transition it to submitted, record the delivery
  * with the auto flag, and hand it to the harness inbox. Idempotent by
  * construction — a task that is not queued (already delivered, running, or
@@ -63,16 +73,21 @@ export function shouldHeartbeatRedeliver(
  * @param ctx - plugin context (notifications).
  * @param ledger - the task ledger.
  * @param id - the ready task's id.
+ * @returns the dispatch outcome; `dag-paused` short-circuits before any wake
+ *   or message construction, so a paused switch has zero side effects.
  */
-export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId): Promise<void> {
+export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId): Promise<DispatchOutcome> {
+  // DAG switch: paused suppresses every NEW delivery. Short-circuit before the
+  // worker wake / message build so a paused state has no side effects.
+  if (ledger.dagState() === 'paused') return { dispatched: false, reason: 'dag-paused' }
   const task = ledger.get(id)
-  if (task === undefined || task.assignedTo === undefined) return
-  if (task.status !== 'queued') return // idempotent: nothing to deliver
+  if (task === undefined || task.assignedTo === undefined) return { dispatched: false, reason: 'not-queued' }
+  if (task.status !== 'queued') return { dispatched: false, reason: 'not-queued' } // idempotent: nothing to deliver
   // Wake-on-delivery (v1.5): a dormant worker is resumed instead of leaving
   // the row queued; only an unwakeable session keeps the row queued for the
   // next sweep.
   const worker = await wakeSession(ctx, task.assignedTo)
-  if (worker === undefined) return // unwakeable worker: the row stays queued and the sweep retries
+  if (worker === undefined) return { dispatched: false, reason: 'no-worker' } // unwakeable worker: the row stays queued and the sweep retries
   // Handoff documents from settled predecessors ride along: structured
   // context (values, decisions, caveats) concatenated after the instruction,
   // so the worker reads the chain's state instead of excavating old reports.
@@ -83,7 +98,7 @@ export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId):
     : task.content
   const message = buildTaskMessage(task.assignedBy, task.id, body, 'scheduler')
   const advanced = await ledger.transition(id, 'submitted')
-  if (!advanced.ok) return // raced: another dispatcher already moved it
+  if (!advanced.ok) return { dispatched: false, reason: 'raced' } // raced: another dispatcher already moved it
   await ledger.recordDelivery(task.id, message.id, true)
   deliverTask(worker, message, task.mode)
   notifySession(
@@ -93,6 +108,7 @@ export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId):
     `任务 ${task.id} 的前置依赖已全部结算,已自动派发,状态「待执行」,等待执行方认领。`,
     'scheduler',
   )
+  return { dispatched: true, taskId: id, status: 'submitted' }
 }
 
 /**
@@ -102,7 +118,8 @@ export async function dispatchOne(ctx: Context, ledger: TaskLedger, id: TaskId):
  * @param ctx - plugin context.
  * @param ledger - the task ledger.
  * @param taskId - the task that just settled.
- * @returns how many tasks were dispatched.
+ * @returns how many tasks were actually dispatched (a `dag-paused` dependent
+ *   is NOT counted as released — it stays queued and is picked up on resume).
  */
 export async function releaseDependents(
   ctx: Context,
@@ -110,10 +127,12 @@ export async function releaseDependents(
   taskId: TaskId,
 ): Promise<number> {
   const ready = await ledger.pendingReleases(taskId)
+  let dispatched = 0
   for (const id of ready) {
-    await dispatchOne(ctx, ledger, id)
+    const outcome = await dispatchOne(ctx, ledger, id)
+    if (outcome.dispatched) dispatched += 1
   }
-  return ready.length
+  return dispatched
 }
 
 /**
@@ -123,17 +142,20 @@ export async function releaseDependents(
  *
  * @param ctx - plugin context.
  * @param ledger - the task ledger.
- * @returns how many tasks were dispatched.
+ * @returns how many tasks were actually dispatched (zero while the DAG switch
+ *   is paused).
  */
 export async function dispatchReadyTasks(ctx: Context, ledger: TaskLedger): Promise<number> {
   const all = ledger.listAll()
   const ready = all.filter(task =>
     task.status === 'queued'
     && blockedByOf(task, all).length === 0)
+  let dispatched = 0
   for (const task of ready) {
-    await dispatchOne(ctx, ledger, task.id)
+    const outcome = await dispatchOne(ctx, ledger, task.id)
+    if (outcome.dispatched) dispatched += 1
   }
-  return ready.length
+  return dispatched
 }
 
 /**

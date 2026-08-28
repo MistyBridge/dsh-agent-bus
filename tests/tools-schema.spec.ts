@@ -215,7 +215,9 @@ function maximalValueOf(name: string): unknown {
     case 'create_task':
       return { taskId: 't1', status: 'submitted', queuePosition: 1, blockedBy: ['dep-1'] }
     case 'edit_task':
-      return { taskId: 't1', status: 'queued', blockedBy: ['dep-1'] }
+      return { taskId: 't1', status: 'queued', blockedBy: ['dep-1'], dagPaused: true }
+    case 'set_dag_state':
+      return { dag: 'running', resumed: 2 }
     case 'list_tasks':
       return [maxListView()]
     case 'get_task':

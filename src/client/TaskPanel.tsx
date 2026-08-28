@@ -988,6 +988,9 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
           ? <span className={css.abPCapsuleDot} />
           : <span className={css.abPCapsuleCount}>{activeCount}</span>}
         <span className={css.abPCapsuleMeta}>{snapshot.workspaces.length} ws</span>
+        {snapshot.dag === 'paused' && (
+          <span className={css.abPBadge} data-tone="warning" title="DAG 派发已暂停,恢复后自动补投">DAG ⏸</span>
+        )}
         {snapshot.instanceStale === true && (
           <span
             className={css.abPStaleBadge}

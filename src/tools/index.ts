@@ -13,6 +13,7 @@ import type { ReportStore } from '../external.ts'
 import type { QuestionRegistry } from '../bridges/question-bridge.ts'
 import type { DispatchRateLimiter } from '../rate-limit.ts'
 import { registerAnswerTools } from './answer.ts'
+import { registerDagTools } from './dag-switch.ts'
 import { registerFlowsTools } from './flows.ts'
 import { registerHelpTools } from './help.ts'
 import { registerListTools } from './list.ts'
@@ -67,5 +68,6 @@ export function registerAgentBusTools(ctx: Context, config: ToolsConfig, deps: T
   registerTasksTools(ctx, config, deps)
   registerAnswerTools(ctx, config, deps)
   registerMembersTools(ctx, config, deps)
+  registerDagTools(ctx, config, deps)
   registerHelpTools(ctx, config, deps)
 }

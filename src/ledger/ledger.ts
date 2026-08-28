@@ -263,6 +263,11 @@ export type FlowResult =
   | { readonly ok: true; readonly flow: FlowRecord }
   | { readonly ok: false; readonly message: string }
 
+/** Result of the DAG dispatch-switch mutation (global state, no task row). */
+export type DagResult =
+  | { readonly ok: true; readonly dag: 'running' | 'paused' }
+  | { readonly ok: false; readonly message: string }
+
 /** Readable duplicate-flow-name refusal, listing the workspace's existing names. */
 function duplicateFlowMessage(name: string, existingNames: readonly string[]): string {
   const list = existingNames.map(existing => `『${existing}』`).join('、')
@@ -1095,6 +1100,39 @@ export class TaskLedger {
    */
   get(id: TaskId): TaskRecord | undefined {
     return this.table.get(id)
+  }
+
+  /**
+   * Report the current DAG dispatch-switch state (durable global).
+   *
+   * Defaults to `running` when the recorded global predates the field (the
+   * schema default fills it on parse, and this guards a backend that did not).
+   *
+   * @returns `'running'` (auto-dispatch) or `'paused'` (suppress new deliveries).
+   */
+  dagState(): 'running' | 'paused' {
+    const dag = this.global.get().dag
+    return dag === 'paused' ? 'paused' : 'running'
+  }
+
+  /**
+   * Switch the DAG dispatch state durably and idempotently.
+   *
+   * Wites through the serialized write chain, emits a `task-changed` marker
+   * for the client switch, and returns the new state. Setting the same value
+   * again is a no-op that still reports the current state.
+   *
+   * @param mode - the new dispatch state.
+   * @returns the recorded state, or a refusal.
+   */
+  async setDagState(mode: 'running' | 'paused'): Promise<DagResult> {
+    return this.enqueue(async () => {
+      const state = this.global.get()
+      if (state.dag === mode) return { ok: true, dag: mode }
+      await this.global.set({ ...state, dag: mode })
+      this.emitChange(TaskId('-'), '-', `dag:${mode}`)
+      return { ok: true, dag: mode }
+    })
   }
 
   /**

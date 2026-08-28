@@ -165,6 +165,8 @@ export interface PanelSnapshot {
   readonly sessions: readonly SessionView[]
   readonly tasks: readonly TaskView[]
   readonly stats: PanelStats
+  /** Durable DAG dispatch switch (module-map §4): `running` auto-dispatches; `paused` suppresses new deliveries. */
+  readonly dag: 'running' | 'paused'
   /**
    * Whether the running host instance predates the latest build (decision 7):
    * the loaded code's build fingerprint differs from the disk fingerprint.
@@ -608,6 +610,7 @@ export async function buildPanelSnapshot(
     tasks,
     flows,
     stats,
+    dag: ledger.dagState(),
     instanceStale: instance.stale,
     staleMessage: instance.message,
     recoveredWorkers: recovery.recoveredWorkers,

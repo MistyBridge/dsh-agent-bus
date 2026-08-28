@@ -40,6 +40,7 @@ export const TOOL_NAMES = [
   'claim_task',
   'create_member',
   'reconfigure_member',
+  'set_dag_state',
   'archive_task',
   'archive_flow',
   'archive_member',
@@ -207,6 +208,14 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 鉴权:authorizePeerOrDormant——caller 须在线且在工作区;目标须为同工作区会话(可 dormant);已归档/subagent 拒绝;不可改配调用方自身。
 - 典型用法:建错角色/权限时一键改配,避免 cancel+recreate 丢历史。
 - 注意:skills 改配本期不支持(技能注册为每层 first-wins,重注册不替换),要改技能请 cancel+recreate;仅影响该成员自身配置,不改任务。`,
+
+  set_dag_state: `set_dag_state 设置 durable 的 DAG 派发开关(running/paused)。
+- 参数:dag(必, 'running'|'paused')。
+- 语义:running(默认)自动派发一切依赖已结算的 queued 任务;paused 抑制一切新投递(已投递任务不受影响),直到回到 running——届时立即补投已就绪但未投递的 queued 任务。状态持久于账本全局(agent_bus.json 的 dag 字段,version 12),重启保留。
+- 返回:{ dag, resumed }。resumed = 恢复 running 时补投的 queued 任务数。
+- 鉴权:caller 须在线(工作区成员即可,无特殊权限)。
+- 典型用法:大改前冻结新任务(不打扰在途任务),改完恢复并自动补投。
+- 注意:暂停不影响已 working/submitted 任务;只抑制新派发。`,
 
   archive_task: `archive_task 手动归档/取消归档一个任务(永不自动)。
 - 参数:task_id(必), archived(可选布尔, 默认 true——true 归档, false 取消归档)。
