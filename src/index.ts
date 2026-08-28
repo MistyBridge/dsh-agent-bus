@@ -130,6 +130,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     maxInlineReport: config.maxInlineReport ?? 400,
   }
 
+  // Carries the ROUTE BY SCOPE + ROUTING PREFERENCE guidance: prefer agent-bus
+  // flows (create_flow / create_task) over a fire-and-forget subagent for large,
+  // multi-deliverable work, so the work stays durable and reviewable per task.
   ctx.systemPrompt.section({
     name: 'agent-bus:usage',
     order: config.promptSectionOrder ?? 118,

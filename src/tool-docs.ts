@@ -63,6 +63,7 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 语义:同 flow 内依赖自洽;跨 flow 引用非法(flow_id 约束全部 dependency 同 flow)。任务结算后自动释放其依赖者;失败沿链传播。
 - 返回:{ flowId, name, suggestion? }。若 name 不含任何语言的字母(纯数字/符号),给命名建议(决策 8)。
 - 鉴权:caller 须在线且在工作区。
+- 路由:多步/多交付物或需并行开发的工作优先 create_flow 组织,而非 fire-and-forget 的一次性 subagent——持久、DAG 调度、按任务验收。
 - 注意:一个 flow 就是一个 DAG;流程内全部任务结算后该 flow 归档。`,
 
   rename_flow: `rename_flow 重命名一个 flow(可选替换其说明)。
@@ -94,6 +95,7 @@ export const TOOL_DOCS: Record<ToolName, string> = {
 - 语义:无依赖 → 立刻投递(有依赖且未结算 → 待投递 queued,依赖结算后自动派发)。target 可休眠(wake-on-delivery),否则排队。reviewer 显式指定则独立验收;self-execution(target=caller)必须指定第三方 reviewer。
 - 鉴权:authorizePeerOrDormant——caller 在线且在工作区;target 须为同 workspace 会话(可休眠);subagent 不可派发。maxPendingPerAgent 上限超了拒绝。
 - 典型用法:派一个可验收的交付物;用 task_id 回答对方的 request_input(任务从 input-required 恢复 working)。
+- 路由:需要可见、可验收的协作走 agent-bus(create_task/flow),而非 fire-and-forget 的一次性 subagent;后者只用于真正一次性、无持久、独立上下文的委派。
 - 注意:超限/依赖/排队都会在返回的 blockedBy/queuePosition 里体现;被拒时按报错调整。`,
 
   edit_task: `edit_task 编辑你创建、尚未派发的任务:改要求、改 DAG 前置(dependencies)、改验收标准、改标题、移动 flow。
@@ -190,6 +192,11 @@ ROUTE BY SCOPE — pick the channel that matches how big the ask is:
 - MEDIUM (one deliverable the peer must produce and you will verify): create_task. Full lifecycle: report → settle → rework/cancel, with timeout backstop.
 - LARGE (a multi-step effort that needs planning and ordering): create_flow. FIRST write out the full plan (what must happen, in what order, by whom), THEN create the flow, then split the plan into tasks created with flow_id and dependencies so the DAG auto-schedules: each task delivers only after its predecessors settle, and a failure propagates down the chain automatically. The flow is your roadmap; the DAG view renders it.
 Never use a heavier channel than the ask needs, and never a lighter one: chat-as-task is how tasks get stuck forever in working; task-as-chat loses the lifecycle that keeps work accountable.
+
+ROUTING PREFERENCE — prefer agent-bus for work you would otherwise fan out: durable and reviewable, not a fire-and-forget subagent:
+- LARGE / multi-step / multi-deliverable, or parallel work with subdeliverables → create_flow (+ create_task with flow_id + dependencies): durable, DAG-scheduled, reviewable per task.
+- Peer / team collaboration, shared-workspace work, anything that should be visible and accepted → agent-bus.
+- Only one-shot, no-persistence, independent-context delegation → the harness subagent tool.
 
 Incoming agent-bus messages open with a header naming the request kind, so read it first:
 - <dsh-agent-bus task="…" tool="create_task" sender="…"> — a task to work; do it and call report_task with that task id.
