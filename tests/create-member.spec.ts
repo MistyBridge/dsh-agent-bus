@@ -224,14 +224,25 @@ describe('parseCreateMemberInput', () => {
     if (!result.ok) expect(result.error).toContain('skills[0]')
   })
 
-  it('refuses a skill item missing content, naming the field', () => {
+  it('refuses a skill item with only content but no description', () => {
     const result = parseCreateMemberInput({
       workspace: WORKSPACE,
       name: 'M',
-      skills: [{ name: 'a', description: 'b' }],
+      skills: [{ name: 'a', content: 'body' }],
     })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toContain('skills[0].content')
+    if (!result.ok) expect(result.error).toMatch(/both description and content.*or neither/)
+  })
+
+  it('accepts a name-only skill reference (neither description nor content), to be resolved by name at onboarding', () => {
+    const result = parseCreateMemberInput({
+      workspace: WORKSPACE,
+      name: 'M',
+      skills: [{ name: 'existing-skill' }],
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.plan.skills).toEqual([{ name: 'existing-skill' }])
   })
 
   it('refuses an empty preset-name permission', () => {
@@ -588,6 +599,24 @@ describe('onboardMember setup guards', () => {
     expect(String(error)).toContain('create-session')
     expect(String(error)).toContain('nothing was created')
     expect(m.create).not.toHaveBeenCalled()
+  })
+
+  it('resolves a name-only skill reference through the skills service during setup', async () => {
+    const skills = { get: vi.fn(async (name: string) =>
+      name === 'existing-skill' ? { description: 'from catalog', content: 'catalog body' } : undefined) }
+    const m = makeHost({ skills: skills as unknown as CreateMemberHost['skills'] })
+    // The reference is registered with the catalog body and source pinned.
+    const ctx = fakeAgentCtx()
+    await buildSetup(m.host, plan({ skills: [{ name: 'existing-skill' }] }))(ctx)
+    expect(skills.get).toHaveBeenCalledWith('existing-skill')
+    expect(ctx.registerSkill).toHaveBeenCalledWith({ name: 'existing-skill', description: 'from catalog', content: 'catalog body', source: 'runtime' })
+  })
+
+  it('refuses a name-only reference to a skill that does not exist', async () => {
+    const skills = { get: vi.fn(async () => undefined) }
+    const m = makeHost({ skills: skills as unknown as CreateMemberHost['skills'] })
+    const setup = buildSetup(m.host, plan({ skills: [{ name: 'missing-skill' }] }))
+    await expect(setup(fakeAgentCtx())).rejects.toThrow(/no such skill/)
   })
 })
 

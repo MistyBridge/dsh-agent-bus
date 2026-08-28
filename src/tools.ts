@@ -2001,11 +2001,11 @@ function assertFlowName(name: string): void {
           additionalProperties: false,
           properties: {
             name: { type: 'string', required: true, description: 'Kebab-case skill identifier.' },
-            description: { type: 'string', required: true, description: 'Short routing description.' },
-            content: { type: 'string', required: true, description: 'Markdown instruction body.' },
+            description: { type: 'string', description: 'Short routing description; omit to reference an existing skill by name.' },
+            content: { type: 'string', description: 'Markdown instruction body; omit to reference an existing skill by name.' },
           },
         },
-        description: 'Runtime skill definitions mounted into the member\'s scope.',
+        description: 'Runtime skill definitions mounted into the member\'s scope: inline {name, description, content}, or {name} only to reference an already-discovered skill (its body is resolved at onboarding).',
       },
       mcp: { type: 'object', additionalProperties: true, description: 'MCP configuration; not injectable programmatically this phase, skipped with a warning.' },
       permissions: {
@@ -2072,6 +2072,9 @@ function assertFlowName(name: string): void {
         sessionTitle: ctx.sessionTitle,
         permissionPresets: ctx.get('permissionPresets') as PermissionPresetHost | undefined,
         agentPresets: ctx.get('agentPresets') as PresetMountHost | undefined,
+        skills: ctx.get('skills') as {
+          get(name: string): Promise<{ description: string; content: string } | undefined>
+        } | undefined,
         ledger,
       }
       // The new agent renders `{{model}}` from options.model and the request

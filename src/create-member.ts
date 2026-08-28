@@ -47,10 +47,10 @@ export type ApprovalPolicy = 'ask' | 'never'
 export interface SkillSpec {
   /** Kebab-case skill identifier (the skill tool addresses skills by name). */
   readonly name: string
-  /** Short routing description shown by discovery consumers. */
-  readonly description: string
-  /** Markdown instruction body. */
-  readonly content: string
+  /** Short routing description shown by discovery consumers; optional when referencing an existing skill. */
+  readonly description?: string
+  /** Markdown instruction body; optional when referencing an existing skill by name. */
+  readonly content?: string
 }
 
 /** Explicit permission knobs, an alternative to naming a preset. */
@@ -156,6 +156,11 @@ export interface CreateMemberHost {
   readonly permissionPresets?: PermissionPresetHost
   /** Absent when the deployment composes no agent-presets service. */
   readonly agentPresets?: PresetMountHost
+  /** Skills service face for resolving name-only skill references (absent → refuse to reference). */
+  readonly skills?: {
+    /** Load one skill by name, returning its full body, or undefined when unknown. */
+    get(name: string): Promise<{ readonly description: string; readonly content: string } | undefined>
+  }
   readonly ledger: {
     putCard(sessionId: SessionId, card: PeerCard): Promise<void>
     getFlow(id: string): FlowRecord | undefined
@@ -250,15 +255,26 @@ export function parseCreateMemberInput(raw: unknown): ParseResult {
         return refusal(`create_member: field "skills[${index}]" must be a skill definition object`)
       }
       const spec = item as Record<string, unknown>
-      for (const key of ['name', 'description', 'content'] as const) {
-        if (typeof spec[key] !== 'string' || (spec[key] as string).trim() === '') {
-          return refusal(`create_member: field "skills[${index}].${key}" must be a non-empty string`)
-        }
+      if (typeof spec.name !== 'string' || (spec.name as string).trim() === '') {
+        return refusal(`create_member: field "skills[${index}].name" must be a non-empty string`)
+      }
+      const description = spec.description
+      const content = spec.content
+      // A skill entry is either a full inline definition (description + content
+      // both supplied) or a name-only reference (neither supplied, the body is
+      // resolved from an existing skill by name at build time). A partial one
+      // of the two would leave the member with a body-less or label-less skill.
+      const hasDescription = typeof description === 'string' && (description as string).trim() !== ''
+      const hasContent = typeof content === 'string' && (content as string).trim() !== ''
+      if (hasDescription !== hasContent) {
+        return refusal(
+          `create_member: field "skills[${index}]" must supply both description and content for an inline skill, or neither to reference an existing skill by name`,
+        )
       }
       parsed.push({
         name: (spec.name as string).trim(),
-        description: (spec.description as string).trim(),
-        content: (spec.content as string).trim(),
+        ...(hasDescription ? { description: (description as string).trim() } : {}),
+        ...(hasContent ? { content: (content as string).trim() } : {}),
       })
     }
     skills = parsed
@@ -366,8 +382,15 @@ interface SkillRegistrationLike {
   readonly source: string
 }
 
+/** A fully-resolved skill spec: name plus a concrete description and content. */
+interface ResolvedSkillSpec {
+  readonly name: string
+  readonly description: string
+  readonly content: string
+}
+
 /** Build the registration `ctx.skills.register` expects, pinning a stable source. */
-function toSkillRegistration(spec: SkillSpec): SkillRegistrationLike {
+function toSkillRegistration(spec: ResolvedSkillSpec): SkillRegistrationLike {
   return {
     name: spec.name,
     description: spec.description,
@@ -409,11 +432,22 @@ function validateSkillRegistration(skill: SkillRegistrationLike): void {
  * @returns the setup callback for `agents.create`.
  */
 export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx: Context) => Promise<void> {
-  // Preflight the runtime skills (name grammar, description, source) before
-  // returning the setup so a bad skill fails at create_member time rather than
-  // when the member loads it.
-  const skillRegistrations = plan.skills?.map(toSkillRegistration) ?? []
-  for (const registration of skillRegistrations) validateSkillRegistration(registration)
+  // Preflight the fully-supplied (inline) skills synchronously before returning
+  // the setup so a malformed inline skill name refuses at create_member time
+  // rather than when the member later loads the skill. Name-only references
+  // cannot be validated here (resolution is async), so they are checked inside
+  // the setup closure.
+  const inlineRegistrations: SkillRegistrationLike[] = []
+  for (const spec of plan.skills ?? []) {
+    if (spec.content === undefined || spec.description === undefined) continue
+    const registration = toSkillRegistration({
+      name: spec.name,
+      description: spec.description,
+      content: spec.content,
+    })
+    validateSkillRegistration(registration)
+    inlineRegistrations.push(registration)
+  }
 
   return async (agentCtx) => {
     if (host.agentPresets !== undefined) {
@@ -435,7 +469,27 @@ export function buildSetup(host: CreateMemberHost, plan: OnboardPlan): (agentCtx
       if (skills === undefined) {
         throw new Error('create_member: field "skills" needs the skills service, which this deployment does not compose')
       }
-      for (const registration of skillRegistrations) {
+      // Inline (already-validated) registrations plus any name-only references
+      // resolved now against the existing skill catalog.
+      const registrations = [...inlineRegistrations]
+      for (const spec of plan.skills) {
+        if (spec.content !== undefined && spec.description !== undefined) continue
+        if (host.skills === undefined) {
+          throw new Error('create_member: field "skills" references an existing skill by name, but this deployment does not compose a skills service to resolve it')
+        }
+        const existing = await host.skills.get(spec.name)
+        if (existing === undefined) {
+          throw new Error(`create_member: field "skills" references skill "${spec.name}", but no such skill exists`)
+        }
+        const registration = toSkillRegistration({
+          name: spec.name,
+          description: existing.description,
+          content: existing.content,
+        })
+        validateSkillRegistration(registration)
+        registrations.push(registration)
+      }
+      for (const registration of registrations) {
         skills.register(registration)
       }
     }
