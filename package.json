@@ -42,8 +42,7 @@
     "client": {
       "platform": "web",
       "inject": [
-        "slots",
-        "sessions"
+        "slots"
       ]
     }
   },

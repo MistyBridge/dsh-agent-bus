@@ -11,17 +11,15 @@
  */
 
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { IconChevronDownOutline14, IconCloseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ObservableSnapshot, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   emptySnapshot,
   formatTokenUsage,
@@ -100,9 +98,12 @@ const ROLE_LABEL = {
   reviewer: '验收',
 } as const
 
-/** Optional current-session feed; highlighting is best-effort. */
+/** The session-selection hook shape supplied to global slot children (mirrors ui-slots' SnapshotSelectorHook). */
+type SessionListHook = <S>(sel: (s: SessionListState) => S, eq?: (a: S, b: S) => boolean) => S
+
+/** The framework useSessions standard hook supplied to shell.overlay children. */
 export interface TaskPanelProps {
-  readonly sessionsList?: ObservableSnapshot<SessionListState>
+  readonly useSessions?: SessionListHook
 }
 
 function readStoredWorkspace(): string | null {
@@ -326,17 +327,9 @@ function ensurePanelStyles(): void {
 }
 
 function useCurrentSessionId(
-  sessionsList: ObservableSnapshot<SessionListState> | undefined,
+  useSessions: SessionListHook | undefined,
 ): string | undefined {
-  const subscribe = useCallback((onStoreChange: () => void) => {
-    if (sessionsList === undefined) return () => {}
-    return sessionsList.subscribe(onStoreChange)
-  }, [sessionsList])
-  const getSnapshot = useCallback(
-    () => sessionsList?.getSnapshot().current,
-    [sessionsList],
-  )
-  return useSyncExternalStore(subscribe, getSnapshot, () => undefined)
+  return useSessions === undefined ? undefined : useSessions(state => state.current)
 }
 
 function dispatchReady(tasks: readonly TaskView[], changedId: string | null): void {
@@ -667,7 +660,7 @@ const css = {
 /**
  * Capsule opens the launcher; 任务 / 流程 each open a sticky-note window.
  */
-export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
+export function TaskPanel({ useSessions }: TaskPanelProps): JSX.Element {
   useLayoutEffect(() => { ensurePanelStyles() }, [])
   const { snapshot, loading, refresh } = usePanelSnapshot()
   const archiveToggle = async (kind: 'task' | 'flow', id: string, archived: boolean): Promise<void> => {
@@ -681,7 +674,7 @@ export function TaskPanel({ sessionsList }: TaskPanelProps): JSX.Element {
       refresh()
     }
   }
-  const currentSessionId = useCurrentSessionId(sessionsList)
+  const currentSessionId = useCurrentSessionId(useSessions)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const taskNote = useNoteWindow(TASK_NOTE_KEY, defaultTaskNoteGeom)
   const dagNote = useNoteWindow(DAG_NOTE_KEY, defaultDagNoteGeom)
